@@ -1,0 +1,237 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sync-bg: #222222;
+  --color-sync-blue: #4FACFE;
+  --color-sync-white: #FFFFFF;
+}
+
+:root {
+  --sync-bg: #F5F5F5;
+  --sync-blue: #7CC2E8;
+  --sync-gradient: linear-gradient(135deg, #7CC2E8 0%, rgba(255, 255, 255, 0.9) 100%);
+  --sync-glass: rgba(255, 255, 255, 0.7);
+  --sync-glass-border: rgba(0, 0, 0, 0.1);
+  --sync-blur: 20px;
+}
+
+body {
+  background-color: var(--sync-bg);
+  color: #333;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+  letter-spacing: 0.05em;
+}
+
+/* 优化后的 SYNC Logo 样式 - 去除 absolute，使用 Flex */
+.sync-totem {
+  position: relative;
+  filter: drop-shadow(0 0 30px rgba(79, 172, 254, 0.3));
+  z-index: 10;
+}
+
+.sync-circle {
+  border-radius: 50%;
+  background: var(--sync-gradient);
+  flex-shrink: 0;
+}
+
+.breathing {
+  animation: breathe 6s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 0.85; filter: blur(0px); }
+  50% { transform: scale(1.05); opacity: 1; filter: blur(1px); }
+}
+
+/* Glassmorphism 卡片 */
+.glass-card {
+  background: var(--sync-glass);
+  backdrop-filter: blur(var(--sync-blur));
+  -webkit-backdrop-filter: blur(var(--sync-blur));
+  border: 1px solid var(--sync-glass-border);
+  border-radius: 32px;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.soft-button {
+  @apply px-8 py-4 rounded-full transition-all duration-500 flex items-center gap-3;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: #333;
+}
+
+.soft-button:hover {
+  background: rgba(124, 194, 232, 0.2);
+  border-color: rgba(124, 194, 232, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.05);
+}
+
+/* 动态波纹与粒子 */
+.voice-ball {
+  position: absolute;
+  width: 100px;
+  height: 100px;
+  background: radial-gradient(circle, rgba(168, 85, 247, 0.4) 0%, transparent 70%);
+  border-radius: 50%;
+  filter: blur(10px);
+  animation: voice-ball-breathe 2s ease-in-out infinite;
+}
+
+@keyframes voice-ball-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.5; }
+  50% { transform: scale(1.3); opacity: 0.8; }
+}
+
+.ripple {
+  position: absolute;
+  border: 2px solid rgba(124, 194, 232, 0.4);
+  border-radius: 50%;
+  pointer-events: none;
+  animation: ripple-expand 2.5s cubic-bezier(0, 0, 0.2, 1) forwards;
+}
+
+@keyframes ripple-expand {
+  0% { width: 0; height: 0; opacity: 0.8; transform: translate(-50%, -50%) scale(0); }
+  100% { width: 500px; height: 500px; opacity: 0; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* U型交互屏 */
+.arc-container {
+  position: absolute;
+  width: 90vw;
+  max-width: 800px;
+  aspect-ratio: 2/1;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: none;
+  border-radius: 50vw 50vw 0 0;
+  bottom: -50px;
+  left: 50%;
+  transform: translateX(-50%);
+  mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
+}
+
+.arc-line {
+  position: absolute;
+  inset: 0;
+  border-top: 2px solid rgba(79, 172, 254, 0.1);
+  border-radius: 50vw 50vw 0 0;
+  animation: arc-breathe 4s ease-in-out infinite;
+}
+
+@keyframes arc-breathe {
+  0%, 100% { opacity: 0.2; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.02); }
+}
+
+.palm-icon {
+  position: absolute;
+  bottom: 100px;
+  opacity: 0.5;
+  transition: all 0.5s ease;
+  filter: drop-shadow(0 0 10px rgba(124, 194, 232, 0.3));
+}
+
+.palm-left { left: 10%; transform: rotate(-15deg); }
+.palm-right { right: 10%; transform: rotate(15deg); }
+
+.light-flow {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.flow-particle {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: var(--sync-blue);
+  border-radius: 50%;
+  filter: blur(2px);
+  box-shadow: 0 0 10px var(--sync-blue);
+}
+
+/* 流体背景背景 */
+.fluid-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  z-index: -1;
+  animation: fluid-move 20s infinite alternate ease-in-out;
+}
+
+.fluid-blob-1 {
+  width: 400px;
+  height: 400px;
+  background: rgba(79, 172, 254, 0.15);
+  top: -100px;
+  left: -100px;
+}
+
+.fluid-blob-2 {
+  width: 500px;
+  height: 500px;
+  background: rgba(168, 85, 247, 0.1);
+  bottom: -150px;
+  right: -100px;
+  animation-delay: -5s;
+}
+
+@keyframes fluid-move {
+  0% { transform: translate(0, 0) scale(1) rotate(0deg); }
+  33% { transform: translate(100px, 50px) scale(1.1) rotate(120deg); }
+  66% { transform: translate(-50px, 100px) scale(0.9) rotate(240deg); }
+  100% { transform: translate(0, 0) scale(1) rotate(360deg); }
+}
+
+/* 开舱门动画 */
+.door-container {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  display: flex;
+  background: transparent;
+}
+
+.door-half {
+  width: 50%;
+  height: 100%;
+  background: #222222;
+  position: relative;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.door-left {
+  justify-content: flex-end;
+  border-right: 1px solid rgba(79, 172, 254, 0.1);
+}
+
+.door-right {
+  justify-content: flex-start;
+  border-left: 1px solid rgba(79, 172, 254, 0.1);
+}
+
+.door-logo-half {
+  width: 240px;
+  height: 240px;
+  background: var(--sync-gradient);
+  border-radius: 50%;
+  position: absolute;
+  opacity: 0.8;
+  filter: drop-shadow(0 0 30px rgba(79, 172, 254, 0.4));
+}
+
+.door-left .door-logo-half { right: -120px; }
+.door-right .door-logo-half { left: -120px; opacity: 0.6; width: 160px; height: 160px; }
+
+.sync-text-gradient {
+  background: linear-gradient(to right, #4FACFE, #FFFFFF);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
