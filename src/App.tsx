@@ -108,13 +108,13 @@ const CabinUI = ({
   const[ripples, setRipples] = useState<Ripple[]>([]);
   const[sparks, setSparks] = useState<Spark[]>([]); 
   
-  const[ideaModal, setIdeaModal] = useState<'hidden' | 'listening' | 'typing' | 'processing'>('hidden');
+  const[ideaModal, setIdeaModal] = useState<'hidden' | 'listening' | 'processing'>('hidden');
   const [ideaInput, setIdeaInput] = useState("");
   let recognitionRef = useRef<any>(null);
   let listeningTimeout = useRef<any>(null);
   let initialTimeout = useRef<any>(null);
   const textBufferRef = useRef(""); // 用 Ref 来存储累加的文本，打破 React 闭包陷阱
-  const ideaModalRef = useRef<'hidden' | 'listening' | 'typing' | 'processing'>('hidden');
+  const ideaModalRef = useRef<'hidden' | 'listening' | 'processing'>('hidden');
 
   // 安全阀
   const restartCountRef = useRef(0); // 连续拉起失败的次数
@@ -122,7 +122,7 @@ const CabinUI = ({
 
   useBackgroundNoise(cabinMode === 'recharge' || cabinMode === 'inspiration');
 
-  const updateModalState = (state: 'hidden' | 'listening' | 'typing' | 'processing') => {
+  const updateModalState = (state: 'hidden' | 'listening' | 'processing') => {
     ideaModalRef.current = state;
     setIdeaModal(state);
   };
@@ -158,7 +158,7 @@ const CabinUI = ({
 
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) { updateModalState('typing'); return; } 
+    if (!SpeechRecognition) { updateModalState('hidden'); return; } 
 
     recognitionRef.current = new SpeechRecognition();
     recognitionRef.current.lang = 'zh-CN';
@@ -209,20 +209,19 @@ const CabinUI = ({
     };
 
     recognitionRef.current.onerror = (e: any) => { 
-      // 只在明显错误时切换到打字模式
+      // 明显错误时关闭
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'network') {
-        updateModalState('typing');
+        updateModalState('hidden');
       }
-      // no-speech 等错误不处理，继续监听
     }; 
 
     // 极度安全的优雅重启机制
     recognitionRef.current.onend = () => {
       if (ideaModalRef.current === 'listening' && !isStartingRef.current) {
-        // 如果连续没说话且断开超过 5 次，主动停止挣扎，切键盘
+        // 如果连续没说话且断开超过 5 次，关闭
         if (restartCountRef.current >= 5) {
-          console.warn("语音引擎连续异常断开，触发安全降级");
-          updateModalState('typing');
+          console.warn("语音引擎连续异常断开，关闭");
+          updateModalState('hidden');
           return;
         }
 
@@ -249,7 +248,7 @@ const CabinUI = ({
       recognitionRef.current.start(); 
     } catch(e){ 
       console.error('Recognition start failed:', e);
-      updateModalState('typing'); 
+      updateModalState('hidden'); 
     } finally {
       isStartingRef.current = false;
     }
@@ -545,15 +544,6 @@ const CabinUI = ({
                     }
                   }} className="flex items-center gap-2 px-6 py-2 rounded-full bg-[#4FACFE]/20 border border-[#4FACFE]/30 text-[#4FACFE] text-xs tracking-widest hover:bg-[#4FACFE]/30 transition-all">
                     <Keyboard size={14} /> 停止并提交
-                  </button>
-                </div>
-              )}
-
-              {ideaModal === 'typing' && (
-                <div className="flex flex-col w-full relative z-10">
-                  <textarea autoFocus value={ideaInput} onChange={(e) => setIdeaInput(e.target.value)} placeholder="在这里输入你的碎片灵感..." className="w-full h-32 bg-white/5 border border-white/10 rounded-2xl p-4 text-white/90 placeholder-white/30 focus:outline-none focus:border-[#4FACFE]/50 transition-colors resize-none mb-6" />
-                  <button onClick={() => submitIdea(ideaInput)} disabled={!ideaInput.trim()} className="w-full py-4 rounded-xl bg-[#4FACFE]/20 text-[#4FACFE] tracking-widest font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#4FACFE]/30 transition-all">
-                    存入卡片
                   </button>
                 </div>
               )}
