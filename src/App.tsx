@@ -215,15 +215,15 @@ const CabinUI = ({
       }
     }; 
 
-    // 简单处理：断开后不自动重启，让用户知道
+    // 断开后：如果有内容就提交，没有就保持打开状态（等待超时或用户操作）
     recognitionRef.current.onend = () => {
       if (ideaModalRef.current === 'listening') {
-        // 如果还有内容，直接提交
         if (textBufferRef.current.trim()) {
+          // 有内容，提交
           handleManualSubmit();
-        } else {
-          updateModalState('hidden');
         }
+        // 如果没有内容，保持打开状态，不自动关闭
+        // 等待用户说话或15秒超时
       }
     };
 
