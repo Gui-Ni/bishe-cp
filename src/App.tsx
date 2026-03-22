@@ -111,14 +111,8 @@ const CabinUI = ({
   const[ideaModal, setIdeaModal] = useState<'hidden' | 'listening' | 'processing'>('hidden');
   const [ideaInput, setIdeaInput] = useState("");
   let recognitionRef = useRef<any>(null);
-  let listeningTimeout = useRef<any>(null);
-  let initialTimeout = useRef<any>(null);
-  const textBufferRef = useRef(""); // 用 Ref 来存储累加的文本，打破 React 闭包陷阱
+  const textBufferRef = useRef(""); // 用 Ref 来存储累加的文本
   const ideaModalRef = useRef<'hidden' | 'listening' | 'processing'>('hidden');
-
-  // 安全阀
-  const restartCountRef = useRef(0); // 连续拉起失败的次数
-  const isStartingRef = useRef(false); // 防止重复调用 start()
 
   useBackgroundNoise(cabinMode === 'recharge' || cabinMode === 'inspiration');
 
@@ -127,21 +121,28 @@ const CabinUI = ({
     setIdeaModal(state);
   };
 
-  // 手动提交函数
+  // 手动提交函数 (完美解决手动关闭时的状态冲突)
   const handleManualSubmit = () => {
+    const finalIdea = textBufferRef.current.trim().replace(/，$/, '');
+    
+    // 1. 核心修复：在调用 stop 之前必须先切换状态为 processing 或 hidden
+    // 这样当 stop() 触发浏览器的 onend 事件时，就不会再错误地触发静默重启了。
+    if (finalIdea) {
+      updateModalState('processing');
+    } else {
+      updateModalState('hidden');
+    }
+
+    // 2. 安全地停止录音引擎
     if (recognitionRef.current) { 
       try { recognitionRef.current.stop(); } catch(e){} 
     }
-    // 清除所有定时器
-    if (initialTimeout.current) clearTimeout(initialTimeout.current);
-    if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
 
-    const finalIdea = textBufferRef.current.trim().replace(/，$/, '');
+    // 3. 提交给AI或清空
     if (finalIdea) {
-      updateModalState('processing');
       submitIdea(finalIdea);
     } else {
-      updateModalState('hidden');
+      setIdeaInput("");
     }
   };
 
@@ -149,11 +150,6 @@ const CabinUI = ({
     updateModalState('listening'); 
     setIdeaInput("");
     textBufferRef.current = "";
-    restartCountRef.current = 0;
-    isStartingRef.current = false;
-
-    // 清理可能残留的定时器
-    if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
 
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -161,10 +157,11 @@ const CabinUI = ({
 
     recognitionRef.current = new SpeechRecognition();
     recognitionRef.current.lang = 'zh-CN';
-    recognitionRef.current.continuous = false;
+    // 核心修复：开启连续录音，防止短时间说话结束立刻断掉
+    recognitionRef.current.continuous = true; 
     recognitionRef.current.interimResults = true;
 
-    // 识别到声音：只记录文字
+    // 识别到声音：记录并拼接文字
     recognitionRef.current.onresult = (e:any) => {
       let finalTranscript = textBufferRef.current;
       let interimTranscript = '';
@@ -182,13 +179,12 @@ const CabinUI = ({
     };
 
     recognitionRef.current.onerror = (e: any) => { 
-      // 明显错误时关闭
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'network') {
-        updateModalState('hidden');
-      }
+      console.log("Speech Error: ", e.error); // 遇到没声音等报错仅仅打印，不关窗口，让用户手动掌控
     }; 
 
-    // 断开后：自动重新启动，继续录音
+    // 核心修复：断开后无缝自动重启
+    // 如果你说话中间停顿太久（通常超过5-10秒），浏览器会强制抛出 onend 自动结束
+    // 只要你没点过“提交”按钮（意味着状态依旧是 listening），我们就让它悄悄继续启动监听！
     recognitionRef.current.onend = () => {
       if (ideaModalRef.current === 'listening') {
         try {
@@ -198,31 +194,15 @@ const CabinUI = ({
     };
 
     try { 
-      isStartingRef.current = true;
       recognitionRef.current.start(); 
     } catch(e){ 
       console.error('Recognition start failed:', e);
       updateModalState('hidden'); 
-    } finally {
-      isStartingRef.current = false;
     }
-  };
-
-  const closeIdeaModal = () => {
-    updateModalState('hidden'); 
-    setIdeaInput("");
-    if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
-    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
   };
 
   // 通过代理调用 AI（支持传入指定文本）
   const submitIdea = async (textToSubmit: string) => {
-    if (!textToSubmit.trim()) {
-      updateModalState('hidden');
-      return;
-    }
-
-    updateModalState('processing');
     try {
       const response = await fetch('https://minimax-proxy.onrender.com/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -465,14 +445,7 @@ const CabinUI = ({
               
               <div className="flex justify-between items-center mb-8 relative z-10">
                 <h3 className="text-xl font-light tracking-[0.2em] text-white">灵感记录</h3>
-                <button onClick={() => {
-                  if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-                  if (textBufferRef.current.trim()) {
-                    submitIdea(textBufferRef.current.replace(/，$/, ''));
-                  } else {
-                    updateModalState('hidden');
-                  }
-                }} className="text-white/40 hover:text-white transition-colors">停止</button>
+                <button onClick={handleManualSubmit} className="text-white/40 hover:text-white transition-colors">取消/关闭</button>
               </div>
 
               {ideaModal === 'listening' && (
@@ -487,15 +460,8 @@ const CabinUI = ({
                   </div>
                   
                   <p className="text-white/80 tracking-widest text-sm mb-2">正在录音...</p>
-                  <p className="text-white/40 text-xs mb-6">最长3分钟，说完点击麦克风停止</p>
-                  <button onClick={() => {
-                    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-                    if (textBufferRef.current.trim()) {
-                      submitIdea(textBufferRef.current.replace(/，$/, ''));
-                    } else {
-                      updateModalState('hidden');
-                    }
-                  }} className="flex items-center gap-2 px-6 py-2 rounded-full bg-[#4FACFE]/20 border border-[#4FACFE]/30 text-[#4FACFE] text-xs tracking-widest hover:bg-[#4FACFE]/30 transition-all">
+                  <p className="text-white/40 text-xs mb-6">不限时长，说完请点击下方按钮停止并提交</p>
+                  <button onClick={handleManualSubmit} className="flex items-center gap-2 px-6 py-2 rounded-full bg-[#4FACFE]/20 border border-[#4FACFE]/30 text-[#4FACFE] text-xs tracking-widest hover:bg-[#4FACFE]/30 transition-all">
                     <Keyboard size={14} /> 停止并提交
                   </button>
                 </div>
@@ -518,7 +484,8 @@ const CabinUI = ({
         >
           <Mic size={16} className="text-[#4FACFE]" />
           <span className="text-xs text-white/70 tracking-widest hidden md:inline">点击记录灵感</span>
-          <span className="text-xs text-white/70 tracking-widest md:hidden">记录</span>
+          {/* 将原本移动端隐藏的“记录”改为了“灵感记录” */}
+          <span className="text-xs text-white/70 tracking-widest md:hidden">灵感记录</span>
         </button>
       )}
     </motion.div>
@@ -620,7 +587,7 @@ const MobileUI = ({
 export default function App() {
   const[view, setView] = useState<'cabin' | 'mobile'>('mobile');
   const[cabinMode, setCabinMode] = useState<CabinMode>('idle');
-  const [targetMode, setTargetMode] = useState<CabinMode | null>(null);
+  const[targetMode, setTargetMode] = useState<CabinMode | null>(null);
   const [mobileState, setMobileState] = useState<MobileState>('home');
   const [isTransitioning, setIsTransitioning] = useState(false);
   
