@@ -8,7 +8,6 @@ type CabinMode = 'idle' | 'pose-confirm' | 'recharge' | 'inspiration' | 'ending'
 type MobileState = 'home' | 'modeSelect' | 'activeInCabin' | 'result' | 'cardsView';
 
 interface Ripple { id: number; x: number; y: number; }
-// 新增：发射火花的接口，带起始和终点坐标
 interface Spark { id: number; startX: number; startY: number; endX: number; endY: number; }
 interface EnergyBall { id: number; isConsumed: boolean; x: number; y: number; size: number; }
 interface SessionResult { mode: string; percent: number; score: string; cards: number; }
@@ -16,7 +15,7 @@ interface SessionResult { mode: string; percent: number; score: string; cards: n
 // ==========================================
 // 🔴 从环境变量读取 Minimax API Key
 // ==========================================
-const MINIMAX_API_KEY = import.meta.env.VITE_MINIMAX_API_KEY || ""; 
+const MINIMAX_API_KEY = import.meta.env.VITE_MINIMAX_API_KEY || "请在这里填入你的_MINIMAX_API_KEY"; 
 
 const INSPIRATION_DB =[
   "在静谧的深处，光总是会找到它的出口。",
@@ -99,49 +98,35 @@ const CabinUI = ({
   const[balls, setBalls] = useState<EnergyBall[]>([]);
   const[randomSpots, setRandomSpots] = useState<{id: number, x: number, y: number, size: number}[]>([]);
   
-  // 涟漪与飞溅火花层
   const[ripples, setRipples] = useState<Ripple[]>([]);
   const[sparks, setSparks] = useState<Spark[]>([]); 
+  const rippleIdRef = useRef(0);
   
-  const[ideaModal, setIdeaModal] = useState<'hidden' | 'listening' | 'typing' | 'processing'>('hidden');
-  const [ideaInput, setIdeaInput] = useState("");
-  let recognitionRef = useRef<any>(null);
-  let listeningTimeout = useRef<any>(null);
+  // 🔴 VAD 智能语音核心控制状态
+  const [ideaModal, setIdeaModal] = useState<'hidden' | 'listening' | 'typing' | 'processing'>('hidden');
+  const [ideaInput, setIdeaInput] = useState(""); // 实时显示在屏幕上的文字
+  
+  // 使用 Ref 打破闭包陷阱，记录当前面板状态、倒计时和累加文本
+  const ideaModalRef = useRef<'hidden' | 'listening' | 'typing' | 'processing'>('hidden');
+  const textBufferRef = useRef(""); 
+  const recognitionRef = useRef<any>(null);
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const initialTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const updateModalState = (state: 'hidden' | 'listening' | 'typing' | 'processing') => {
+    ideaModalRef.current = state;
+    setIdeaModal(state);
+  };
 
   useBackgroundNoise(cabinMode === 'recharge' || cabinMode === 'inspiration');
 
-  const openIdeaModal = () => {
-    setIdeaModal('listening'); setIdeaInput("");
-    // @ts-ignore
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) { setIdeaModal('typing'); return; } 
-    
-    recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.lang = 'zh-CN';
-    recognitionRef.current.continuous = false;
-    
-    recognitionRef.current.onresult = (e:any) => {
-      setIdeaInput(e.results[0][0].transcript);
-      setIdeaModal('typing'); 
-    };
-    recognitionRef.current.onerror = () => { setIdeaModal('typing'); }; 
-    recognitionRef.current.onend = () => { if (ideaModal === 'listening') setIdeaModal('typing'); };
-    
-    try { recognitionRef.current.start(); } catch(e){ setIdeaModal('typing'); }
-    
-    if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
-    listeningTimeout.current = setTimeout(() => { if (ideaModal === 'listening') setIdeaModal('typing'); }, 5000);
-  };
-
-  const closeIdeaModal = () => {
-    setIdeaModal('hidden'); setIdeaInput("");
-    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-  };
-
-  // AI 保留原话，只修错字
-  const submitIdea = async () => {
-    if (!ideaInput.trim()) return;
-    setIdeaModal('processing');
+  // ================= AI 灵感处理逻辑 =================
+  const submitIdea = async (textToSubmit: string) => {
+    if (!textToSubmit.trim()) {
+      updateModalState('hidden');
+      return;
+    }
+    updateModalState('processing');
     try {
       const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MINIMAX_API_KEY}` },
@@ -149,10 +134,11 @@ const CabinUI = ({
           model: "abab6.5s-chat", 
           messages:[ 
             { 
+              // 🔴 极度严格的 System Prompt，防止 AI 瞎总结
               role: "system", 
-              content: "你是一个语音错字纠正助手。请仅仅修复用户输入文本中的错别字，并去掉'啊'、'呃'、'那个'等无意义的语气词，使句子通顺。必须完全保留用户的原意和第一人称语气，绝对不要去总结它，不要擅自加上任何解释、前缀或套话。直接输出修正后的原话。" 
+              content: "你是一个文本整理器。你的任务是：仅仅修复用户输入文本中的错别字，去掉'啊'、'呃'、'那个'等无意义的语气助词。必须完全保留用户的原话原意和第一人称。绝对不允许概括、绝对不允许添加任何前缀（如'原话是'）、绝对不允许进行排版。直接输出修正后的原话本身即可。" 
             }, 
-            { role: "user", content: ideaInput } 
+            { role: "user", content: textToSubmit } 
           ] 
         })
       });
@@ -160,10 +146,94 @@ const CabinUI = ({
       const data = await response.json();
       addCard(data.choices[0].message.content);
     } catch (error) {
-      addCard(ideaInput); 
-    } finally { closeIdeaModal(); }
+      addCard(textToSubmit); // 接口挂了，直接存原话
+    } finally { 
+      updateModalState('hidden');
+      setIdeaInput("");
+    }
   };
 
+  // ================= 智能 VAD 语音监听流程 =================
+  const openIdeaModal = () => {
+    updateModalState('listening'); 
+    setIdeaInput("");
+    textBufferRef.current = "";
+    
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) { updateModalState('typing'); return; } 
+    
+    recognitionRef.current = new SpeechRecognition();
+    recognitionRef.current.lang = 'zh-CN';
+    recognitionRef.current.continuous = true;     // 开启持续监听
+    recognitionRef.current.interimResults = true; // 开启实时返回结果（用于快速打断计时器）
+    
+    // 防死等机制：如果打开面板后 15 秒连一个字都没说，自动关闭
+    if(initialTimerRef.current) clearTimeout(initialTimerRef.current);
+    initialTimerRef.current = setTimeout(() => {
+      if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
+        if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+        updateModalState('hidden');
+      }
+    }, 15000);
+
+    // 核心检测回调
+    recognitionRef.current.onresult = (e:any) => {
+      // 只要有人声，立刻清除初始关机倒计时
+      if(initialTimerRef.current) clearTimeout(initialTimerRef.current);
+
+      let finalTranscript = textBufferRef.current;
+      let interimTranscript = '';
+
+      // 遍历所有结果，区分已敲定的话和正在说的话
+      for (let i = e.resultIndex; i < e.results.length; ++i) {
+        if (e.results[i].isFinal) {
+          finalTranscript += e.results[i][0].transcript + "，";
+        } else {
+          interimTranscript += e.results[i][0].transcript;
+        }
+      }
+
+      textBufferRef.current = finalTranscript;
+      
+      // 更新屏幕显示的字（实时的，非常有安全感）
+      setIdeaInput(finalTranscript + interimTranscript);
+
+      // 🔴 只要侦测到人声（无论最终还是实时），立刻清除之前的 8 秒倒计时，并重新开始计时！
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = setTimeout(() => {
+        // 连续 8 秒没声音了，触发总结
+        if (ideaModalRef.current === 'listening') {
+           if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+           submitIdea(textBufferRef.current.replace(/，$/, '')); // 提交
+        }
+      }, 8000);
+    };
+
+    recognitionRef.current.onerror = (e: any) => { 
+      if (e.error !== 'no-speech') updateModalState('typing'); 
+    }; 
+    
+    recognitionRef.current.onend = () => { 
+      // 如果因为系统原因自动断开了，但我们还在录制阶段（说明没到8秒），强行把它重启！
+      if (ideaModalRef.current === 'listening') {
+        try { recognitionRef.current.start(); } catch(e){}
+      }
+    };
+    
+    try { recognitionRef.current.start(); } catch(e){ updateModalState('typing'); }
+  };
+
+  const closeIdeaModal = () => {
+    updateModalState('hidden'); 
+    setIdeaInput("");
+    if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
+    if(silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if(initialTimerRef.current) clearTimeout(initialTimerRef.current);
+    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+  };
+
+  // ================= 核心交互逻辑 =================
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (cabinMode === 'pose-confirm') {
@@ -193,8 +263,7 @@ const CabinUI = ({
     if (cabinMode === 'recharge') {
       const bounds = getTopHalfBounds();
       const generateNewBalls = () => [...Array(5)].map((_, i) => ({ 
-        id: Math.random(), isConsumed: false, 
-        x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.6 
+        id: Math.random(), isConsumed: false, x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.6 
       }));
       if (balls.length === 0) setBalls(generateNewBalls());
       else if (balls.every(b => b.isConsumed)) setTimeout(() => setBalls(generateNewBalls()), 800);
@@ -217,9 +286,8 @@ const CabinUI = ({
       }, 3000);
       return () => clearInterval(spotInterval);
     }
-  }, [cabinMode]);
+  },[cabinMode]);
 
-  // 【核心修复】：点击灵感球 -> 产生涟漪 + 发射爆炸粒子
   const handleSpotClick = (e: React.MouseEvent | React.TouchEvent, spot: {id: number, x: number, y: number, size: number}) => {
     if (cabinMode !== 'inspiration') return;
     
@@ -227,35 +295,26 @@ const CabinUI = ({
     if ('touches' in e) { clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; } 
     else { clientX = (e as React.MouseEvent).clientX; clientY = (e as React.MouseEvent).clientY; }
 
-    // 1. 产生大涟漪 Ripple
     const newRippleId = Math.random();
     setRipples(prev =>[...prev, { id: newRippleId, x: clientX, y: clientY }]);
     setTimeout(() => setRipples(prev => prev.filter(r => r.id !== newRippleId)), 2500);
 
-    // 2. 生成向外发射的火花 (Sparks)
-    const particleCount = 12; // 12颗粒子呈放射状炸开
+    const particleCount = 12; 
     const newSparks: Spark[] =[...Array(particleCount)].map(() => {
-      const angle = Math.random() * Math.PI * 2; // 随机角度
-      const velocity = 150 + Math.random() * 150; // 随机弹射距离
-      return {
-        id: Math.random(),
-        startX: clientX, startY: clientY,
-        endX: clientX + Math.cos(angle) * velocity,
-        endY: clientY + Math.sin(angle) * velocity
-      };
+      const angle = Math.random() * Math.PI * 2; 
+      const velocity = 150 + Math.random() * 150; 
+      return { id: Math.random(), startX: clientX, startY: clientY, endX: clientX + Math.cos(angle) * velocity, endY: clientY + Math.sin(angle) * velocity };
     });
     
     setSparks(prev =>[...prev, ...newSparks]);
     setTimeout(() => {
       const sparkIds = newSparks.map(s => s.id);
       setSparks(prev => prev.filter(s => !sparkIds.includes(s.id)));
-    }, 800); // 0.8秒后火花消失
+    }, 800);
 
-    // 移除被点击的球并计分
     setRandomSpots(prev => prev.filter(s => s.id !== spot.id));
     recordAction(); 
     
-    // 在安全区重新生成
     setTimeout(() => {
       const bounds = getTopHalfBounds();
       setRandomSpots(prev =>[...prev, { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.8 }]);
@@ -347,16 +406,11 @@ const CabinUI = ({
         )}
       </div>
 
-      {/* ================= 发射特效层 ================= */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
         {ripples.map(ripple => <div key={ripple.id} className="ripple" style={{ left: ripple.x, top: ripple.y }} />)}
         {sparks.map(spark => (
-          <motion.div key={spark.id}
-            initial={{ scale: 1, opacity: 1, x: spark.startX, y: spark.startY }}
-            animate={{ scale: 0, opacity: 0, x: spark.endX, y: spark.endY }}
-            transition={{ duration: 0.6, ease: "easeOut" }}
-            className="absolute w-3 h-3 bg-white rounded-full blur-[1px] shadow-[0_0_15px_#4FACFE]"
-          />
+          <motion.div key={spark.id} initial={{ scale: 1, opacity: 1, x: spark.startX, y: spark.startY }} animate={{ scale: 0, opacity: 0, x: spark.endX, y: spark.endY }} transition={{ duration: 0.6, ease: "easeOut" }}
+            className="absolute w-3 h-3 bg-white rounded-full blur-[1px] shadow-[0_0_15px_#4FACFE]" />
         ))}
       </div>
 
@@ -372,12 +426,11 @@ const CabinUI = ({
         )}
       </AnimatePresence>
 
-      {/* 🔴 完美还原图1的灵感录入 Modal */}
+      {/* 🔴 VAD 智能录音面板 */}
       <AnimatePresence>
         {ideaModal !== 'hidden' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md px-4">
             <div className="w-full max-w-lg bg-[#111111] border border-white/5 rounded-[32px] p-8 flex flex-col shadow-2xl relative overflow-hidden">
-              
               <div className="flex justify-between items-center mb-12 relative z-10">
                 <h3 className="text-lg font-light tracking-[0.2em] text-white/90">灵感记录</h3>
                 <button onClick={closeIdeaModal} className="text-white/30 hover:text-white/80 transition-colors text-sm tracking-widest">取消</button>
@@ -389,9 +442,12 @@ const CabinUI = ({
                     <motion.div animate={{ scale:[1, 1.8, 1], opacity:[0.1, 0.4, 0.1] }} transition={{ duration: 2, repeat: Infinity }} className="absolute w-24 h-24 bg-[#4FACFE] rounded-full blur-[30px]" />
                     <Mic size={36} className="text-[#4FACFE] relative z-10 drop-shadow-[0_0_10px_rgba(79,172,254,0.8)]" />
                   </div>
-                  <p className="text-white/60 tracking-widest text-sm mb-12">请说出你的灵感...</p>
+                  {/* 屏幕实时显示当前说出的话，如果没说话就显示提示 */}
+                  <p className="text-white/80 tracking-widest text-sm mb-12 text-center h-10 overflow-hidden text-ellipsis px-4">
+                    {ideaInput ? ideaInput : "等待人声，或点击下方切换..."}
+                  </p>
                   
-                  <button onClick={() => setIdeaModal('typing')} className="flex items-center gap-2 px-6 py-2.5 rounded-full bg-white/5 border border-white/10 text-white/50 text-xs tracking-widest hover:bg-white/10 transition-all hover:text-white/80">
+                  <button onClick={() => updateModalState('typing')} className="flex items-center gap-2 px-6 py-2.5 rounded-full bg-white/5 border border-white/10 text-white/50 text-xs tracking-widest hover:bg-white/10 transition-all hover:text-white/80">
                     <Keyboard size={14} /> 切换为键盘输入
                   </button>
                 </div>
@@ -400,8 +456,8 @@ const CabinUI = ({
               {ideaModal === 'typing' && (
                 <div className="flex flex-col w-full relative z-10">
                   <textarea autoFocus value={ideaInput} onChange={(e) => setIdeaInput(e.target.value)} placeholder="在这里输入你的碎片灵感..." className="w-full h-32 bg-white/5 border border-white/10 rounded-2xl p-4 text-white/90 placeholder-white/30 focus:outline-none focus:border-[#4FACFE]/50 transition-colors resize-none mb-6" />
-                  <button onClick={submitIdea} disabled={!ideaInput.trim()} className="w-full py-4 rounded-xl bg-[#4FACFE]/20 text-[#4FACFE] tracking-widest font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#4FACFE]/30 transition-all">
-                    保存灵感
+                  <button onClick={() => submitIdea(ideaInput)} disabled={!ideaInput.trim()} className="w-full py-4 rounded-xl bg-[#4FACFE]/20 text-[#4FACFE] tracking-widest font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#4FACFE]/30 transition-all">
+                    存入卡片
                   </button>
                 </div>
               )}
@@ -523,14 +579,14 @@ const MobileUI = ({
 // 4. 主应用路由
 // ==========================================
 export default function App() {
-  const[view, setView] = useState<'cabin' | 'mobile'>('mobile');
-  const[cabinMode, setCabinMode] = useState<CabinMode>('idle');
+  const [view, setView] = useState<'cabin' | 'mobile'>('mobile');
+  const [cabinMode, setCabinMode] = useState<CabinMode>('idle');
   const[targetMode, setTargetMode] = useState<CabinMode | null>(null);
   const[mobileState, setMobileState] = useState<MobileState>('home');
-  const [isTransitioning, setIsTransitioning] = useState(false);
+  const[isTransitioning, setIsTransitioning] = useState(false);
   
   const [timeElapsed, setTimeElapsed] = useState(0);
-  const [generatedCards, setGeneratedCards] = useState<string[]>([]);
+  const[generatedCards, setGeneratedCards] = useState<string[]>([]);
   const[sessionResult, setSessionResult] = useState<SessionResult | null>(null);
   
   const[actionCount, setActionCount] = useState(0);

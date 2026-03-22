@@ -112,88 +112,103 @@ const CabinUI = ({
   const [ideaInput, setIdeaInput] = useState("");
   let recognitionRef = useRef<any>(null);
   let listeningTimeout = useRef<any>(null);
+  let initialTimeout = useRef<any>(null);
   const textBufferRef = useRef(""); // 用 Ref 来存储累加的文本，打破 React 闭包陷阱
+  const ideaModalRef = useRef<'hidden' | 'listening' | 'typing' | 'processing'>('hidden');
 
   useBackgroundNoise(cabinMode === 'recharge' || cabinMode === 'inspiration');
 
+  const updateModalState = (state: 'hidden' | 'listening' | 'typing' | 'processing') => {
+    ideaModalRef.current = state;
+    setIdeaModal(state);
+  };
+
   const openIdeaModal = () => {
-    setIdeaModal('listening'); 
+    updateModalState('listening'); 
     setIdeaInput("");
-    textBufferRef.current = ""; // 每次打开清空缓存
+    textBufferRef.current = "";
 
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) { setIdeaModal('typing'); return; } 
+    if (!SpeechRecognition) { updateModalState('typing'); return; } 
 
     recognitionRef.current = new SpeechRecognition();
     recognitionRef.current.lang = 'zh-CN';
-    recognitionRef.current.continuous = true; // 开启持续监听
+    recognitionRef.current.continuous = true;
+    recognitionRef.current.interimResults = true; // 开启实时返回结果
 
-    // 8 秒静音倒计时逻辑
-    const resetSilenceTimer = () => {
-      if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
-      listeningTimeout.current = setTimeout(() => {
-        // 8秒内没说话了！自动停止录音并提交
-        if (recognitionRef.current) {
-          try { recognitionRef.current.stop(); } catch(e){}
+    // 防死等机制：如果打开面板后 15 秒连一个字都没说，自动关闭
+    if(initialTimeout.current) clearTimeout(initialTimeout.current);
+    initialTimeout.current = setTimeout(() => {
+      if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
+        if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+        updateModalState('hidden');
+      }
+    }, 15000);
+
+    // 核心检测回调
+    recognitionRef.current.onresult = (e:any) => {
+      // 只要有人声，立刻清除初始关机倒计时
+      if(initialTimeout.current) clearTimeout(initialTimeout.current);
+
+      let finalTranscript = textBufferRef.current;
+      let interimTranscript = '';
+
+      // 遍历所有结果，区分已敲定的话和正在说的话
+      for (let i = e.resultIndex; i < e.results.length; ++i) {
+        if (e.results[i].isFinal) {
+          finalTranscript += e.results[i][0].transcript + "，";
+        } else {
+          interimTranscript += e.results[i][0].transcript;
         }
-        submitIdea(textBufferRef.current);
+      }
+
+      textBufferRef.current = finalTranscript;
+      
+      // 更新屏幕显示的字（实时的）
+      setIdeaInput(finalTranscript + interimTranscript);
+
+      // 只要侦测到人声（无论最终还是实时），立刻清除之前的 8 秒倒计时，并重新开始计时
+      if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
+      listeningTimeout.current = setTimeout(() => {
+        // 连续 8 秒没声音了，触发总结
+        if (ideaModalRef.current === 'listening') {
+           if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+           submitIdea(textBufferRef.current.replace(/，$/, ''));
+        }
       }, 8000);
     };
 
-    // 一开始监听就启动 8 秒倒计时
-    recognitionRef.current.onstart = () => {
-      resetSilenceTimer();
-    };
-
-    // 监听到语音结果
-    recognitionRef.current.onresult = (e:any) => {
-      let newTranscript = "";
-      // 必须遍历 event.resultIndex 才能拿到持续识别中最新的一句话
-      for (let i = e.resultIndex; i < e.results.length; ++i) {
-        if (e.results[i].isFinal) {
-          newTranscript += e.results[i][0].transcript;
-        }
-      }
-
-      if (newTranscript) {
-        textBufferRef.current += newTranscript + "，"; 
-        setIdeaInput(textBufferRef.current); // 同步更新 UI 上显示的字
-        resetSilenceTimer(); // 只要说话了，就重置 8 秒倒计时
-      }
-    };
-
     recognitionRef.current.onerror = (e: any) => { 
-      // 防止因为静音导致的 no-speech 报错直接中断流程
-      if (e.error !== 'no-speech') setIdeaModal('typing'); 
+      if (e.error !== 'no-speech') updateModalState('typing'); 
     }; 
 
-    // 手动关闭或意外中断时的处理
     recognitionRef.current.onend = () => { 
-      // 如果意外中断，但已经有录音了，则直接提交
-      if (ideaModal === 'listening' && textBufferRef.current.trim().length > 0) {
-        submitIdea(textBufferRef.current);
+      // 如果因为系统原因自动断开，但我们还在录制阶段（说明没到8秒），强行把它重启
+      if (ideaModalRef.current === 'listening') {
+        try { recognitionRef.current.start(); } catch(e){}
       }
     };
 
-    try { recognitionRef.current.start(); } catch(e){ setIdeaModal('typing'); }
+    try { recognitionRef.current.start(); } catch(e){ updateModalState('typing'); }
   };
 
   const closeIdeaModal = () => {
-    setIdeaModal('hidden'); 
+    updateModalState('hidden'); 
     setIdeaInput("");
     if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
+    if(initialTimeout.current) clearTimeout(initialTimeout.current);
     if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
   };
 
   // 通过代理调用 AI（支持传入指定文本）
   const submitIdea = async (textToSubmit: string) => {
     if (!textToSubmit.trim()) {
-      setIdeaModal('hidden');
+      updateModalState('hidden');
       return;
     }
 
-    setIdeaModal('processing');
+    updateModalState('processing');
     try {
       const response = await fetch('https://minimax-proxy.onrender.com/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -214,7 +229,7 @@ const CabinUI = ({
     } catch (error) {
       addCard(textToSubmit); // 失败兜底保存原话
     } finally { 
-      setIdeaModal('hidden');
+      updateModalState('hidden');
       setIdeaInput(""); 
     }
   };
