@@ -116,6 +116,10 @@ const CabinUI = ({
   const textBufferRef = useRef(""); // 用 Ref 来存储累加的文本，打破 React 闭包陷阱
   const ideaModalRef = useRef<'hidden' | 'listening' | 'typing' | 'processing'>('hidden');
 
+  // 安全阀
+  const restartCountRef = useRef(0); // 连续拉起失败的次数
+  const isStartingRef = useRef(false); // 防止重复调用 start()
+
   useBackgroundNoise(cabinMode === 'recharge' || cabinMode === 'inspiration');
 
   const updateModalState = (state: 'hidden' | 'listening' | 'typing' | 'processing') => {
@@ -127,6 +131,8 @@ const CabinUI = ({
     updateModalState('listening'); 
     setIdeaInput("");
     textBufferRef.current = "";
+    restartCountRef.current = 0; // 每次打开清空重试次数
+    isStartingRef.current = false;
 
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -150,6 +156,9 @@ const CabinUI = ({
     recognitionRef.current.onresult = (e:any) => {
       // 只要有人声，立刻清除初始关机倒计时
       if(initialTimeout.current) clearTimeout(initialTimeout.current);
+      
+      // 只要侦测到声音，说明引擎是活着的，重置连续失败次数！
+      restartCountRef.current = 0;
 
       let finalTranscript = textBufferRef.current;
       let interimTranscript = '';
@@ -180,19 +189,49 @@ const CabinUI = ({
     };
 
     recognitionRef.current.onerror = (e: any) => { 
-      // 只在明显错误时切换到打字模式，忽略静音错误
-      if (e.error === 'network' || e.error === 'aborted') {
+      // 只在明显错误时切换到打字模式
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'network') {
         updateModalState('typing');
       }
       // no-speech 等错误不处理，继续监听
     }; 
 
-    // 移除 onend 自动重启逻辑，让它自然结束就好
-    // recognition 会在需要时自动重启
+    // 极度安全的优雅重启机制
+    recognitionRef.current.onend = () => {
+      if (ideaModalRef.current === 'listening' && !isStartingRef.current) {
+        // 如果连续没说话且断开超过 5 次，主动停止挣扎，切键盘
+        if (restartCountRef.current >= 5) {
+          console.warn("语音引擎连续异常断开，触发安全降级");
+          updateModalState('typing');
+          return;
+        }
 
-    try { recognitionRef.current.start(); } catch(e){ 
+        restartCountRef.current += 1;
+        isStartingRef.current = true;
+
+        // 延迟 400ms 再拉起，给浏览器硬件缓冲时间
+        setTimeout(() => {
+          if (ideaModalRef.current === 'listening') {
+            try { 
+              recognitionRef.current.start(); 
+            } catch(e) {
+              console.error("重启麦克风失败:", e);
+            } finally {
+              isStartingRef.current = false;
+            }
+          }
+        }, 400);
+      }
+    };
+
+    try { 
+      isStartingRef.current = true;
+      recognitionRef.current.start(); 
+    } catch(e){ 
       console.error('Recognition start failed:', e);
       updateModalState('typing'); 
+    } finally {
+      isStartingRef.current = false;
     }
   };
 
