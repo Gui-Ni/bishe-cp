@@ -1,20 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Zap, Sparkles, Smartphone, Monitor, ChevronRight, Power, Mic, Check, Hand, Loader2
+  Zap, Sparkles, Smartphone, Monitor, ChevronRight, Power, Mic, Check, Hand, Loader2, Keyboard
 } from 'lucide-react';
 
 type CabinMode = 'idle' | 'pose-confirm' | 'recharge' | 'inspiration' | 'ending';
 type MobileState = 'home' | 'modeSelect' | 'activeInCabin' | 'result' | 'cardsView';
 
 interface Ripple { id: number; x: number; y: number; }
+interface Bloom { id: number; x: number; y: number; size: number; }
 interface EnergyBall { id: number; isConsumed: boolean; x: number; y: number; size: number; }
 interface SessionResult { mode: string; percent: number; score: string; cards: number; }
 
 // ==========================================
-// 从环境变量读取 Minimax API Key
+// 🔴 填入你的 Minimax API Key 
 // ==========================================
-const MINIMAX_API_KEY = import.meta.env.VITE_MINIMAX_API_KEY || ""; 
+const MINIMAX_API_KEY = "请在这里填入你的_MINIMAX_API_KEY"; 
 
 const INSPIRATION_DB =[
   "在静谧的深处，光总是会找到它的出口。",
@@ -23,16 +24,9 @@ const INSPIRATION_DB =[
   "打破原有的边界，让神经元以意想不到的方式连接。"
 ];
 
-// 获取安全的屏幕生成范围 (适配所有尺寸手机/iPad/PC)
-const getSafeBounds = () => {
-  const w = typeof window !== 'undefined' ? window.innerWidth : 800;
-  const h = typeof window !== 'undefined' ? window.innerHeight : 800;
-  return {
-    xRange: w * 0.75, // 限制在屏幕宽度的 75% 以内
-    yRange: h * 0.4   // 限制在屏幕高度的 40% 以内
-  };
-};
-
+// ==========================================
+// 沉浸式白噪音引擎 
+// ==========================================
 const useBackgroundNoise = (isPlaying: boolean) => {
   useEffect(() => {
     if (!isPlaying) return;
@@ -102,86 +96,63 @@ const CabinUI = ({
   const[pushProgress, setPushProgress] = useState(0);
   const[balls, setBalls] = useState<EnergyBall[]>([]);
   const[randomSpots, setRandomSpots] = useState<{id: number, x: number, y: number, size: number}[]>([]);
-  const[ripples, setRipples] = useState<Ripple[]>([]);
-  const rippleIdRef = useRef(0);
-
-  const[isListening, setIsListening] = useState(false);
-  const[isAIGenerating, setIsAIGenerating] = useState(false);
-  const[recordFeedback, setRecordFeedback] = useState("");      
+  const[blooms, setBlooms] = useState<Bloom[]>([]); // 新增：灵感绽放动效层
   
-  const textBufferRef = useRef(""); 
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // 完美防翻车版：灵感录入 Modal 状态
+  const [ideaModal, setIdeaModal] = useState<'hidden' | 'listening' | 'typing' | 'processing'>('hidden');
+  const [ideaInput, setIdeaInput] = useState("");
   let recognitionRef = useRef<any>(null);
+  let listeningTimeout = useRef<any>(null);
 
   useBackgroundNoise(cabinMode === 'recharge' || cabinMode === 'inspiration');
 
-  // 初始化语音引擎
-  useEffect(() => {
-    if (cabinMode === 'idle' || cabinMode === 'pose-confirm' || cabinMode === 'ending') return;
+  // ================= AI 灵感录入逻辑 =================
+  const openIdeaModal = () => {
+    setIdeaModal('listening'); setIdeaInput("");
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) { setRecordFeedback("当前环境无法录音,可长按模拟"); return; }
+    if (!SpeechRecognition) { setIdeaModal('typing'); return; } // 不支持语音直接进打字
     
     recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.continuous = true; recognitionRef.current.lang = 'zh-CN';
+    recognitionRef.current.lang = 'zh-CN';
+    recognitionRef.current.continuous = false;
     
-    recognitionRef.current.onstart = () => setIsListening(true);
-    recognitionRef.current.onresult = (event: any) => {
-      const current = event.resultIndex;
-      const transcript = event.results[current][0].transcript.trim();
-      textBufferRef.current += transcript + "，";
-      setRecordFeedback(`正在倾听...`); 
-      resetSilenceTimer(); 
+    recognitionRef.current.onresult = (e:any) => {
+      setIdeaInput(e.results[0][0].transcript);
+      setIdeaModal('typing'); // 听到声音后转入编辑框让用户确认
     };
-    recognitionRef.current.onerror = (e:any) => { console.log(e); setIsListening(false); };
-    recognitionRef.current.onend = () => setIsListening(false);
+    recognitionRef.current.onerror = () => { setIdeaModal('typing'); }; // 报错直接进打字
+    recognitionRef.current.onend = () => { if (ideaModal === 'listening') setIdeaModal('typing'); };
+    
+    try { recognitionRef.current.start(); } catch(e){ setIdeaModal('typing'); }
+    
+    // 如果 5 秒都没听到声音，自动转打字模式防死等
+    if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
+    listeningTimeout.current = setTimeout(() => { if (ideaModal === 'listening') setIdeaModal('typing'); }, 5000);
+  };
 
-    return () => { if(recognitionRef.current) recognitionRef.current.stop(); setIsListening(false); };
-  }, [cabinMode]);
+  const closeIdeaModal = () => {
+    setIdeaModal('hidden'); setIdeaInput("");
+    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+  };
 
-  // 调用 Minimax API
-  const callMinimaxAPI = async (rawText: string) => {
-    setIsAIGenerating(true); setRecordFeedback("AI 正在凝练灵感...");
+  const submitIdea = async () => {
+    if (!ideaInput.trim()) return;
+    setIdeaModal('processing');
     try {
       const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MINIMAX_API_KEY}` },
-        body: JSON.stringify({ model: "abab6.5s-chat", messages:[ { role: "system", content: "你是一个冥想与灵感交互舱的AI助手。用户的语音被转换成了文本，包含口语。请你提取核心意思，用一句极简、充满诗意和哲理的话来总结（25字以内）。直接输出总结。" }, { role: "user", content: rawText } ] })
+        body: JSON.stringify({ model: "abab6.5s-chat", messages:[ { role: "system", content: "你是一个冥想与灵感交互舱的AI助手。用户的输入可能是口水话。请你提取核心意思，用一句极简、充满诗意和哲理的话来总结（25字以内）。直接输出总结。" }, { role: "user", content: ideaInput } ] })
       });
       if (!response.ok) throw new Error('API Failed');
       const data = await response.json();
       addCard(data.choices[0].message.content);
-      setRecordFeedback("灵感卡片已生成");
     } catch (error) {
-      addCard(rawText); setRecordFeedback("已保存原话内容"); // 兜底
-    } finally { setIsAIGenerating(false); setTimeout(() => setRecordFeedback(""), 3000); }
+      addCard(ideaInput); // API 失败兜底保存原话
+    } finally { closeIdeaModal(); }
   };
 
-  const resetSilenceTimer = () => {
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-    silenceTimerRef.current = setTimeout(() => {
-      if (isListening && recognitionRef.current) recognitionRef.current.stop();
-      const finalIdea = textBufferRef.current.trim().replace(/，$/, '');
-      if (finalIdea.length > 0) callMinimaxAPI(finalIdea);
-      else { setRecordFeedback("未接收到内容，已取消"); setTimeout(() => setRecordFeedback(""), 2000); }
-    }, 3000);
-  };
-
-  // 手动点击触发录音
-  const startRecording = () => {
-    if (isAIGenerating) return;
-    textBufferRef.current = "";
-    setRecordFeedback("正在倾听，请说话...");
-    try { if(recognitionRef.current) recognitionRef.current.start(); } catch(e){}
-    resetSilenceTimer();
-  };
-
-  // 终极防翻车：长按输入兜底 (用于答辩演示时断网/无麦克风)
-  const handleFallbackInput = () => {
-    const fallbackText = window.prompt("【演示兜底模式】\n检测到语音环境可能不可用。\n请直接输入想对 AI 说的口语化灵感：", "我觉得现在脑子很乱，但是又有一种奇怪的放松感");
-    if (fallbackText) callMinimaxAPI(fallbackText);
-  };
-
-  // 姿态确认
+  // ================= 核心交互逻辑 =================
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (cabinMode === 'pose-confirm') {
@@ -201,14 +172,24 @@ const CabinUI = ({
     return () => clearInterval(interval);
   }, [pushProgress]);
 
-  // 【修复】：精神充能 小球生成逻辑（动态屏幕安全区域）
+  // 【修复 1】：将生成坐标严格限制在屏幕上半部分（y 值全为负数，且距离中心有安全距离）
+  const getTopHalfBounds = () => {
+    const w = typeof window !== 'undefined' ? window.innerWidth : 800;
+    const h = typeof window !== 'undefined' ? window.innerHeight : 800;
+    return {
+      xRange: w * 0.8, // 屏幕宽度的 80% 内
+      yMin: -h * 0.45, // 最高不超过屏幕顶部 45%
+      yMax: -h * 0.15  // 最低不低于屏幕中心上方 15% (绝对不会碰到下方弧线)
+    };
+  };
+
   useEffect(() => {
     if (cabinMode === 'recharge') {
-      const bounds = getSafeBounds();
+      const bounds = getTopHalfBounds();
       const generateNewBalls = () => [...Array(5)].map((_, i) => ({ 
         id: Math.random(), isConsumed: false, 
         x: (Math.random() - 0.5) * bounds.xRange, 
-        y: (Math.random() - 0.5) * bounds.yRange - 30, 
+        y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), // 严格限制在上方
         size: 0.6 + Math.random() * 0.6 
       }));
       if (balls.length === 0) setBalls(generateNewBalls());
@@ -216,41 +197,38 @@ const CabinUI = ({
     } else { setBalls([]); setPushProgress(0); }
   },[cabinMode, balls]);
 
-  // 【修复】：灵感触发 光圈生成逻辑（动态屏幕安全区域，不再超出屏幕）
   useEffect(() => {
     if (cabinMode === 'inspiration') {
-      const bounds = getSafeBounds();
+      const bounds = getTopHalfBounds();
       const generateSpots = () => setRandomSpots([
-        { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: (Math.random() - 0.5) * bounds.yRange, size: 0.6 + Math.random() * 0.8 }, 
-        { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: (Math.random() - 0.5) * bounds.yRange, size: 0.6 + Math.random() * 0.8 }
+        { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.8 }, 
+        { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.8 }
       ]);
       generateSpots();
       const spotInterval = setInterval(() => {
         setRandomSpots(prev => {
           if (prev.length > 3) return prev; 
-          return[...prev, { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: (Math.random() - 0.5) * bounds.yRange, size: 0.5 + Math.random() * 1.0 }];
+          return[...prev, { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.5 + Math.random() * 1.0 }];
         });
       }, 3000);
       return () => clearInterval(spotInterval);
     }
   }, [cabinMode]);
 
-  const handleSpotClick = (e: React.MouseEvent | React.TouchEvent, id: number) => {
+  const handleSpotClick = (e: React.MouseEvent | React.TouchEvent, spot: {id: number, x: number, y: number, size: number}) => {
     if (cabinMode !== 'inspiration') return;
-    let clientX = 0; let clientY = 0;
-    if ('touches' in e) { clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; } 
-    else { clientX = (e as React.MouseEvent).clientX; clientY = (e as React.MouseEvent).clientY; }
+    
+    // 【修复 2】：触发绝美绽放动效
+    setBlooms(prev =>[...prev, { id: Math.random(), x: spot.x, y: spot.y, size: spot.size }]);
+    // 1秒后清理绽放DOM
+    setTimeout(() => setBlooms(prev => prev.slice(1)), 1000);
 
-    const newRipple = { id: rippleIdRef.current++, x: clientX, y: clientY };
-    setRipples(prev =>[...prev, newRipple]);
-    setTimeout(() => setRipples(prev => prev.filter(r => r.id !== newRipple.id)), 2500);
-    setRandomSpots(prev => prev.filter(s => s.id !== id));
+    setRandomSpots(prev => prev.filter(s => s.id !== spot.id));
     recordAction(); 
     
-    // 重新在安全区域生成
     setTimeout(() => {
-      const bounds = getSafeBounds();
-      setRandomSpots(prev =>[...prev, { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: (Math.random() - 0.5) * bounds.yRange, size: 0.6 + Math.random() * 0.8 }]);
+      const bounds = getTopHalfBounds();
+      setRandomSpots(prev =>[...prev, { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.8 }]);
     }, 500);
   };
 
@@ -272,21 +250,22 @@ const CabinUI = ({
 
       <AnimatePresence>
         {(cabinMode === 'recharge' || cabinMode === 'inspiration') && (
-          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="absolute top-32 md:top-40 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-30 pointer-events-none whitespace-nowrap">
+          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="absolute top-24 md:top-32 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-30 pointer-events-none whitespace-nowrap">
             <span className="text-white font-mono text-xl tracking-[0.2em] opacity-90" style={{ paddingLeft: '0.2em' }}>进行中 ({formatTime(timeElapsed)})</span>
           </motion.div>
         )}
         {cabinMode === 'pose-confirm' && (
-          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="absolute top-32 md:top-40 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 z-30 pointer-events-none whitespace-nowrap">
+          <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="absolute top-32 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 z-30 pointer-events-none whitespace-nowrap">
             <span className="text-white/80 font-light md:text-lg text-sm tracking-[0.4em]" style={{ paddingLeft: '0.4em' }}>请将双手放置于引导区确认姿态</span>
             <div className="w-48 h-1 bg-white/10 rounded-full overflow-hidden"><div className="h-full bg-[#4FACFE] transition-all duration-75" style={{ width: `${confirmProgress}%` }} /></div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="absolute w-[200vw] md:w-[800px] h-[100vw] md:h-[400px] border-t-[40px] border-[#4FACFE]/10 rounded-t-full bottom-[-50px] pointer-events-none" style={{ maskImage: 'linear-gradient(to bottom, black 50%, transparent 100%)' }} />
+      {/* 【修复 3】：将弧线极度扁平化，释放上方巨大空间 */}
+      <div className="absolute w-[200vw] md:w-[1200px] h-[60vw] md:h-[300px] border-t-[20px] md:border-t-[30px] border-[#4FACFE]/10 rounded-t-[1000px] bottom-[-50px] pointer-events-none max-w-full" style={{ maskImage: 'linear-gradient(to bottom, black 30%, transparent 100%)' }} />
 
-      <div className="absolute bottom-[-50px] w-[200vw] md:w-[800px] h-[200vw] md:h-[800px] rounded-full flex items-center justify-center pointer-events-none z-40">
+      <div className="absolute bottom-[-50px] w-[200vw] md:w-[800px] h-[200vw] md:h-[800px] rounded-full flex items-center justify-center pointer-events-none z-40 max-w-full">
         {cabinMode === 'pose-confirm' && (
           <>
             <div className={`absolute bottom-[100px] left-[20vw] md:left-[50px] transition-all duration-300 ${isPressing ? 'scale-90 opacity-100' : 'scale-100 opacity-40'}`}>
@@ -320,19 +299,26 @@ const CabinUI = ({
               )
             ))}
             <div className="absolute w-64 h-64 rounded-full bg-[#4FACFE] blur-[60px] transition-all duration-75 pointer-events-none" style={{ opacity: (pushProgress / 100) * 0.8, transform: `scale(${0.5 + (pushProgress / 100) * 0.8})` }} />
-            <div className="absolute text-center mt-[45vw] md:mt-[450px] pointer-events-none"><p className="text-[#4FACFE] tracking-[0.3em] text-xs md:text-sm">将散落的思维球拖动至中心聚拢</p></div>
+            <div className="absolute text-center mt-[45vw] md:mt-[300px] pointer-events-none"><p className="text-[#4FACFE] tracking-[0.3em] text-xs md:text-sm">将散落的思维球拖拽至中心聚拢</p></div>
           </div>
         )}
 
         {cabinMode === 'inspiration' && (
           <AnimatePresence>
             {randomSpots.map(spot => (
-              <motion.div key={spot.id} initial={{ opacity: 0, scale: 0, x: spot.x, y: spot.y }} animate={{ opacity: 1, scale: spot.size, x: spot.x, y: spot.y }} exit={{ opacity: 0, scale: spot.size * 3, filter: 'blur(10px)' }} transition={{ duration: 0.5, ease: "easeOut" }}
+              <motion.div key={spot.id} initial={{ opacity: 0, scale: 0, x: spot.x, y: spot.y }} animate={{ opacity: 1, scale: spot.size, x: spot.x, y: spot.y }} exit={{ opacity: 0 }} transition={{ duration: 0.4, ease: "easeOut" }}
                 className="absolute flex items-start justify-center pointer-events-none">
                 <div className="w-16 h-16 rounded-full border border-white/30 bg-white/10 backdrop-blur-md flex items-center justify-center cursor-pointer pointer-events-auto hover:bg-white/30 hover:shadow-[0_0_20px_rgba(255,255,255,0.4)] transition-all shadow-[0_0_15px_rgba(255,255,255,0.1)] touch-none"
-                  onPointerDown={(e) => handleSpotClick(e, spot.id)}>
+                  onPointerDown={(e) => handleSpotClick(e, spot)}>
                   <motion.div animate={{ scale:[1, 1.5, 1], opacity:[0.8, 0, 0.8] }} transition={{ duration: 1.5 + spot.size, repeat: Infinity }} className="absolute w-4 h-4 bg-white rounded-full blur-[2px]" />
                 </div>
+              </motion.div>
+            ))}
+            {/* 独立的 Bloom 绽放层，不受退出动画截断影响 */}
+            {blooms.map(bloom => (
+              <motion.div key={bloom.id} initial={{ scale: bloom.size, opacity: 0.8, x: bloom.x, y: bloom.y }} animate={{ scale: bloom.size * 5, opacity: 0 }} transition={{ duration: 0.8, ease: "easeOut" }}
+                className="absolute flex items-center justify-center pointer-events-none">
+                <div className="w-16 h-16 rounded-full bg-[#4FACFE] blur-[15px]" />
               </motion.div>
             ))}
           </AnimatePresence>
@@ -343,10 +329,6 @@ const CabinUI = ({
          <SyncLogo className="mb-24 scale-[0.6] md:scale-[0.8]" isSyncing={pushProgress > 20 || cabinMode === 'inspiration'} />
       </div>
 
-      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        {ripples.map(ripple => <div key={ripple.id} className="ripple" style={{ left: ripple.x, top: ripple.y }} />)}
-      </div>
-
       <AnimatePresence>
         {cabinMode === 'idle' && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }} className="absolute bottom-24 md:bottom-20 left-1/2 -translate-x-1/2 flex flex-col items-center z-20 whitespace-nowrap pointer-events-none">
@@ -355,33 +337,65 @@ const CabinUI = ({
         )}
       </AnimatePresence>
 
-      {/* 麦克风录音控制区（增加防翻车兜底长按机制） */}
-      {(cabinMode === 'recharge' || cabinMode === 'inspiration') && (
-        <div 
-          className="absolute bottom-16 md:bottom-12 right-6 md:right-12 flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 border border-white/10 backdrop-blur-xl transition-all z-40 cursor-pointer hover:bg-white/10 active:scale-95 touch-none select-none"
-          onClick={(e) => { e.stopPropagation(); startRecording(); }}
-          onContextMenu={(e) => { e.preventDefault(); handleFallbackInput(); }} // 长按触发兜底输入框
+      {/* 🔴 全新重构的终极防翻车语音/输入 Modal */}
+      <AnimatePresence>
+        {ideaModal !== 'hidden' && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md px-4">
+            <div className="w-full max-w-lg bg-[#1A1A1A] border border-white/10 rounded-[32px] p-8 flex flex-col shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-48 h-48 bg-[#4FACFE]/10 blur-3xl -mr-24 -mt-24 pointer-events-none" />
+              
+              <div className="flex justify-between items-center mb-8 relative z-10">
+                <h3 className="text-xl font-light tracking-[0.2em] text-white">灵感记录</h3>
+                <button onClick={closeIdeaModal} className="text-white/40 hover:text-white transition-colors">取消</button>
+              </div>
+
+              {ideaModal === 'listening' && (
+                <div className="flex flex-col items-center justify-center py-12 relative z-10">
+                  <motion.div animate={{ scale:[1, 1.5, 1], opacity:[0.2, 0.6, 0.2] }} transition={{ duration: 1.5, repeat: Infinity }} className="absolute w-32 h-32 bg-[#4FACFE] rounded-full blur-[40px]" />
+                  <Mic size={40} className="text-[#4FACFE] mb-6 relative z-10" />
+                  <p className="text-white/80 tracking-widest text-sm mb-8">请说出你的灵感...</p>
+                  <button onClick={() => setIdeaModal('typing')} className="flex items-center gap-2 px-6 py-2 rounded-full bg-white/5 border border-white/10 text-white/60 text-xs tracking-widest hover:bg-white/10 transition-all">
+                    <Keyboard size={14} /> 切换为键盘输入
+                  </button>
+                </div>
+              )}
+
+              {ideaModal === 'typing' && (
+                <div className="flex flex-col w-full relative z-10">
+                  <textarea autoFocus value={ideaInput} onChange={(e) => setIdeaInput(e.target.value)} placeholder="在这里输入你的碎片灵感..." className="w-full h-32 bg-white/5 border border-white/10 rounded-2xl p-4 text-white/90 placeholder-white/30 focus:outline-none focus:border-[#4FACFE]/50 transition-colors resize-none mb-6" />
+                  <button onClick={submitIdea} disabled={!ideaInput.trim()} className="w-full py-4 rounded-xl bg-[#4FACFE]/20 text-[#4FACFE] tracking-widest font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#4FACFE]/30 transition-all">
+                    让 AI 凝练卡片
+                  </button>
+                </div>
+              )}
+
+              {ideaModal === 'processing' && (
+                <div className="flex flex-col items-center justify-center py-16 relative z-10">
+                  <Loader2 size={40} className="text-[#4FACFE] animate-spin mb-6" />
+                  <p className="text-[#4FACFE] tracking-widest text-sm">Minimax AI 正在凝练诗意箴言...</p>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 底部悬浮呼出按钮 */}
+      {(cabinMode === 'recharge' || cabinMode === 'inspiration') && ideaModal === 'hidden' && (
+        <button onPointerDown={(e) => { e.stopPropagation(); openIdeaModal(); }}
+          className="absolute bottom-16 md:bottom-12 right-6 md:right-12 flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 border border-white/10 backdrop-blur-xl transition-all z-40 cursor-pointer hover:bg-white/10 active:scale-95 touch-none select-none shadow-lg"
         >
-          {recordFeedback ? (
-            <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="flex items-center gap-2 text-[#4FACFE]">
-              {isAIGenerating ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
-              <span className="text-xs tracking-widest">{recordFeedback}</span>
-            </motion.div>
-          ) : (
-            <>
-              {isListening ? <motion.div animate={{ opacity:[0.3, 1, 0.3] }} transition={{ duration: 1.5, repeat: Infinity }}><Mic size={16} className="text-[#4FACFE]" /></motion.div> : <Mic size={16} className="text-white/50" />}
-              <span className="text-xs text-white/50 tracking-widest hidden md:inline">点击或长按记录灵感</span>
-              <span className="text-xs text-white/50 tracking-widest md:hidden">记录灵感</span>
-            </>
-          )}
-        </div>
+          <Mic size={16} className="text-[#4FACFE]" />
+          <span className="text-xs text-white/70 tracking-widest hidden md:inline">记录灵感</span>
+          <span className="text-xs text-white/70 tracking-widest md:hidden">记录</span>
+        </button>
       )}
     </motion.div>
   );
 };
 
 // ==========================================
-// 3. 手机端 UI
+// 3. 手机端 UI (保持不变，已很完美)
 // ==========================================
 const MobileUI = ({ 
   mobileState, setMobileState, enterCabin, cabinMode, targetMode, sessionResult, endSession, generatedCards
@@ -479,7 +493,7 @@ export default function App() {
   const [mobileState, setMobileState] = useState<MobileState>('home');
   const [isTransitioning, setIsTransitioning] = useState(false);
   
-  const[timeElapsed, setTimeElapsed] = useState(0);
+  const [timeElapsed, setTimeElapsed] = useState(0);
   const [generatedCards, setGeneratedCards] = useState<string[]>([]);
   const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
   
