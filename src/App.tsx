@@ -123,19 +123,39 @@ const CabinUI = ({
     
     recognitionRef.current = new SpeechRecognition();
     recognitionRef.current.lang = 'zh-CN';
-    recognitionRef.current.continuous = false;
+    recognitionRef.current.continuous = true; // 持续识别
+    
+    let silenceTimer: NodeJS.Timeout;
+    const resetSilenceTimer = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => {
+        if (ideaModal === 'listening') {
+          recognitionRef.current?.stop();
+          setIdeaModal('typing');
+        }
+      }, 8000); // 8秒无声音后自动结束
+    };
     
     recognitionRef.current.onresult = (e:any) => {
-      setIdeaInput(e.results[0][0].transcript);
-      setIdeaModal('typing'); 
+      const transcript = e.results[0][0].transcript;
+      if (transcript) {
+        setIdeaInput(prev => prev ? prev + transcript : transcript);
+        resetSilenceTimer(); // 每次识别到声音就重置计时器
+      }
     };
-    recognitionRef.current.onerror = () => { setIdeaModal('typing'); }; 
-    recognitionRef.current.onend = () => { if (ideaModal === 'listening') setIdeaModal('typing'); };
+    recognitionRef.current.onerror = () => { 
+      if (silenceTimer) clearTimeout(silenceTimer);
+      setIdeaModal('typing'); 
+    }; 
+    recognitionRef.current.onend = () => { 
+      if (silenceTimer) clearTimeout(silenceTimer);
+      if (ideaModal === 'listening') setIdeaModal('typing'); 
+    };
     
-    try { recognitionRef.current.start(); } catch(e){ setIdeaModal('typing'); }
-    
-    if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
-    listeningTimeout.current = setTimeout(() => { if (ideaModal === 'listening') setIdeaModal('typing'); }, 5000);
+    try { 
+      recognitionRef.current.start(); 
+      resetSilenceTimer(); // 开始时启动计时器
+    } catch(e){ setIdeaModal('typing'); }
   };
 
   const closeIdeaModal = () => {
