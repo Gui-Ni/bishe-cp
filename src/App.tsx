@@ -162,7 +162,7 @@ const CabinUI = ({
 
     recognitionRef.current = new SpeechRecognition();
     recognitionRef.current.lang = 'zh-CN';
-    recognitionRef.current.continuous = true;
+    recognitionRef.current.continuous = false;
     recognitionRef.current.interimResults = true;
 
     // 15秒不说自动关闭
@@ -208,9 +208,13 @@ const CabinUI = ({
       }
     }; 
 
-    // 断开后：不做任何处理，等待用户点击或超时
+    // 断开后：自动重新启动，继续录音
     recognitionRef.current.onend = () => {
-      // 保持当前状态，让用户自己点击停止
+      if (ideaModalRef.current === 'listening') {
+        try {
+          recognitionRef.current.start();
+        } catch(e) {}
+      }
     };
 
     try { 
