@@ -540,9 +540,9 @@ export default function App() {
 
       <AnimatePresence mode="wait">
         {view === 'cabin' ? (
-          <CabinUI key="cabin" cabinMode={cabinMode} setCabinMode={setCabinMode} targetMode={targetMode} addCard={(t) => setGeneratedCards(p =>[...p, t])} timeElapsed={timeElapsed} endSession={endSession} recordAction={() => setActionCount(p => p + 1)} />
+          <CabinUI cabinMode={cabinMode} setCabinMode={setCabinMode} targetMode={targetMode} addCard={(t) => setGeneratedCards(p =>[...p, t])} timeElapsed={timeElapsed} endSession={endSession} recordAction={() => setActionCount(p => p + 1)} />
         ) : (
-          <MobileUI key="mobile" mobileState={mobileState} setMobileState={setMobileState} enterCabin={enterCabin} cabinMode={cabinMode} targetMode={targetMode} sessionResult={sessionResult} endSession={endSession} generatedCards={generatedCards} />
+          <MobileUI mobileState={mobileState} setMobileState={setMobileState} enterCabin={enterCabin} cabinMode={cabinMode} targetMode={targetMode} sessionResult={sessionResult} endSession={endSession} generatedCards={generatedCards} />
         )}
       </AnimatePresence>
 
