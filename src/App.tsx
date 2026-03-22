@@ -126,12 +126,25 @@ const CabinUI = ({
     recognitionRef.current.continuous = true; // 持续识别
     
     let silenceTimer: NodeJS.Timeout;
+    const finishListening = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch(e){}
+      }
+      // 如果有内容，自动触发AI总结
+      if (ideaInput.trim()) {
+        setIdeaModal('processing');
+        submitIdea();
+      } else {
+        setIdeaModal('hidden');
+      }
+    };
+    
     const resetSilenceTimer = () => {
       if (silenceTimer) clearTimeout(silenceTimer);
       silenceTimer = setTimeout(() => {
         if (ideaModal === 'listening') {
-          recognitionRef.current?.stop();
-          setIdeaModal('typing');
+          finishListening(); // 8秒无声音后自动结束并触发AI总结
         }
       }, 8000); // 8秒无声音后自动结束
     };
@@ -149,7 +162,7 @@ const CabinUI = ({
     }; 
     recognitionRef.current.onend = () => { 
       if (silenceTimer) clearTimeout(silenceTimer);
-      if (ideaModal === 'listening') setIdeaModal('typing'); 
+      if (ideaModal === 'listening') finishListening();
     };
     
     try { 
