@@ -143,7 +143,7 @@ const CabinUI = ({
     recognitionRef.current.continuous = true;
     recognitionRef.current.interimResults = true; // 开启实时返回结果
 
-    // 防死等机制：如果打开面板后 15 秒连一个字都没说，自动关闭
+    // 1. 防死等：15秒不说自动关闭
     if(initialTimeout.current) clearTimeout(initialTimeout.current);
     initialTimeout.current = setTimeout(() => {
       if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
@@ -152,18 +152,27 @@ const CabinUI = ({
       }
     }, 15000);
 
+    // 2. 固定录音时长：3分钟
+    if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
+    listeningTimeout.current = setTimeout(() => {
+      if (ideaModalRef.current === 'listening') {
+        if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+        submitIdea(textBufferRef.current.replace(/，$/, ''));
+      }
+    }, 180000); // 3分钟 = 180000ms
+
     // 核心检测回调
     recognitionRef.current.onresult = (e:any) => {
-      // 只要有人声，立刻清除初始关机倒计时
+      // 只要有人声，清除15秒关闭倒计时
       if(initialTimeout.current) clearTimeout(initialTimeout.current);
       
-      // 只要侦测到声音，说明引擎是活着的，重置连续失败次数！
+      // 重置连续失败次数
       restartCountRef.current = 0;
 
       let finalTranscript = textBufferRef.current;
       let interimTranscript = '';
 
-      // 遍历所有结果，区分已敲定的话和正在说的话
+      // 遍历所有结果
       for (let i = e.resultIndex; i < e.results.length; ++i) {
         if (e.results[i].isFinal) {
           finalTranscript += e.results[i][0].transcript + "，";
@@ -173,19 +182,7 @@ const CabinUI = ({
       }
 
       textBufferRef.current = finalTranscript;
-      
-      // 更新屏幕显示的字（实时的）
       setIdeaInput(finalTranscript + interimTranscript);
-
-      // 只要侦测到人声（无论最终还是实时），立刻清除之前的 8 秒倒计时，并重新开始计时
-      if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
-      listeningTimeout.current = setTimeout(() => {
-        // 连续 8 秒没声音了，触发总结
-        if (ideaModalRef.current === 'listening') {
-           if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-           submitIdea(textBufferRef.current.replace(/，$/, ''));
-        }
-      }, 8000);
     };
 
     recognitionRef.current.onerror = (e: any) => { 
@@ -493,16 +490,31 @@ const CabinUI = ({
               
               <div className="flex justify-between items-center mb-8 relative z-10">
                 <h3 className="text-xl font-light tracking-[0.2em] text-white">灵感记录</h3>
-                <button onClick={closeIdeaModal} className="text-white/40 hover:text-white transition-colors">取消</button>
+                <button onClick={() => {
+                  if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+                  if (textBufferRef.current.trim()) {
+                    submitIdea(textBufferRef.current.replace(/，$/, ''));
+                  } else {
+                    updateModalState('hidden');
+                  }
+                }} className="text-white/40 hover:text-white transition-colors">停止</button>
               </div>
 
               {ideaModal === 'listening' && (
                 <div className="flex flex-col items-center justify-center py-12 relative z-10">
                   <motion.div animate={{ scale:[1, 1.5, 1], opacity:[0.2, 0.6, 0.2] }} transition={{ duration: 1.5, repeat: Infinity }} className="absolute w-32 h-32 bg-[#4FACFE] rounded-full blur-[40px]" />
                   <Mic size={40} className="text-[#4FACFE] mb-6 relative z-10" />
-                  <p className="text-white/80 tracking-widest text-sm mb-8">请说出你的灵感...</p>
-                  <button onClick={() => setIdeaModal('typing')} className="flex items-center gap-2 px-6 py-2 rounded-full bg-white/5 border border-white/10 text-white/60 text-xs tracking-widest hover:bg-white/10 transition-all">
-                    <Keyboard size={14} /> 切换为键盘输入
+                  <p className="text-white/80 tracking-widest text-sm mb-4">正在录音...</p>
+                  <p className="text-white/40 text-xs mb-8">最长3分钟</p>
+                  <button onClick={() => {
+                    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+                    if (textBufferRef.current.trim()) {
+                      submitIdea(textBufferRef.current.replace(/，$/, ''));
+                    } else {
+                      updateModalState('hidden');
+                    }
+                  }} className="flex items-center gap-2 px-6 py-2 rounded-full bg-[#4FACFE]/20 border border-[#4FACFE]/30 text-[#4FACFE] text-xs tracking-widest hover:bg-[#4FACFE]/30 transition-all">
+                    <Keyboard size={14} /> 停止并提交
                   </button>
                 </div>
               )}
