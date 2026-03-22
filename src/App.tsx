@@ -112,73 +112,87 @@ const CabinUI = ({
   const [ideaInput, setIdeaInput] = useState("");
   let recognitionRef = useRef<any>(null);
   let listeningTimeout = useRef<any>(null);
+  const textBufferRef = useRef(""); // 用 Ref 来存储累加的文本，打破 React 闭包陷阱
 
   useBackgroundNoise(cabinMode === 'recharge' || cabinMode === 'inspiration');
 
   const openIdeaModal = () => {
-    setIdeaModal('listening'); setIdeaInput("");
+    setIdeaModal('listening'); 
+    setIdeaInput("");
+    textBufferRef.current = ""; // 每次打开清空缓存
+
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) { setIdeaModal('typing'); return; } 
-    
+
     recognitionRef.current = new SpeechRecognition();
     recognitionRef.current.lang = 'zh-CN';
-    recognitionRef.current.continuous = true; // 持续识别
-    
-    let silenceTimer: NodeJS.Timeout;
-    const finishListening = () => {
-      if (silenceTimer) clearTimeout(silenceTimer);
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch(e){}
-      }
-      // 如果有内容，自动触发AI总结
-      if (ideaInput.trim()) {
-        setIdeaModal('processing');
-        submitIdea();
-      } else {
-        setIdeaModal('hidden');
-      }
-    };
-    
+    recognitionRef.current.continuous = true; // 开启持续监听
+
+    // 8 秒静音倒计时逻辑
     const resetSilenceTimer = () => {
-      if (silenceTimer) clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(() => {
-        if (ideaModal === 'listening') {
-          finishListening(); // 8秒无声音后自动结束并触发AI总结
+      if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
+      listeningTimeout.current = setTimeout(() => {
+        // 8秒内没说话了！自动停止录音并提交
+        if (recognitionRef.current) {
+          try { recognitionRef.current.stop(); } catch(e){}
         }
-      }, 8000); // 8秒无声音后自动结束
+        submitIdea(textBufferRef.current);
+      }, 8000);
     };
-    
+
+    // 一开始监听就启动 8 秒倒计时
+    recognitionRef.current.onstart = () => {
+      resetSilenceTimer();
+    };
+
+    // 监听到语音结果
     recognitionRef.current.onresult = (e:any) => {
-      const transcript = e.results[0][0].transcript;
-      if (transcript) {
-        setIdeaInput(prev => prev ? prev + transcript : transcript);
-        resetSilenceTimer(); // 每次识别到声音就重置计时器
+      let newTranscript = "";
+      // 必须遍历 event.resultIndex 才能拿到持续识别中最新的一句话
+      for (let i = e.resultIndex; i < e.results.length; ++i) {
+        if (e.results[i].isFinal) {
+          newTranscript += e.results[i][0].transcript;
+        }
+      }
+
+      if (newTranscript) {
+        textBufferRef.current += newTranscript + "，"; 
+        setIdeaInput(textBufferRef.current); // 同步更新 UI 上显示的字
+        resetSilenceTimer(); // 只要说话了，就重置 8 秒倒计时
       }
     };
-    recognitionRef.current.onerror = () => { 
-      if (silenceTimer) clearTimeout(silenceTimer);
-      setIdeaModal('typing'); 
+
+    recognitionRef.current.onerror = (e: any) => { 
+      // 防止因为静音导致的 no-speech 报错直接中断流程
+      if (e.error !== 'no-speech') setIdeaModal('typing'); 
     }; 
+
+    // 手动关闭或意外中断时的处理
     recognitionRef.current.onend = () => { 
-      if (silenceTimer) clearTimeout(silenceTimer);
-      if (ideaModal === 'listening') finishListening();
+      // 如果意外中断，但已经有录音了，则直接提交
+      if (ideaModal === 'listening' && textBufferRef.current.trim().length > 0) {
+        submitIdea(textBufferRef.current);
+      }
     };
-    
-    try { 
-      recognitionRef.current.start(); 
-      resetSilenceTimer(); // 开始时启动计时器
-    } catch(e){ setIdeaModal('typing'); }
+
+    try { recognitionRef.current.start(); } catch(e){ setIdeaModal('typing'); }
   };
 
   const closeIdeaModal = () => {
-    setIdeaModal('hidden'); setIdeaInput("");
+    setIdeaModal('hidden'); 
+    setIdeaInput("");
+    if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
     if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
   };
 
-  // 通过代理调用 AI
-  const submitIdea = async () => {
-    if (!ideaInput.trim()) return;
+  // 通过代理调用 AI（支持传入指定文本）
+  const submitIdea = async (textToSubmit: string) => {
+    if (!textToSubmit.trim()) {
+      setIdeaModal('hidden');
+      return;
+    }
+
     setIdeaModal('processing');
     try {
       const response = await fetch('https://minimax-proxy.onrender.com/chat', {
@@ -190,7 +204,7 @@ const CabinUI = ({
               role: "system", 
               content: "你是一个文字整理助手。请把用户口语化的输入整理得通顺简洁，只修正明显的错别字和口头禅（如'啊'、'嗯'、'那个'等），保留原意。直接输出整理后的句子，不要加任何前缀、解释或诗意表达。" 
             }, 
-            { role: "user", content: ideaInput } 
+            { role: "user", content: textToSubmit } 
           ] 
         })
       });
@@ -198,8 +212,11 @@ const CabinUI = ({
       const data = await response.json();
       addCard(data.choices[0].message.content);
     } catch (error) {
-      addCard(ideaInput); 
-    } finally { closeIdeaModal(); }
+      addCard(textToSubmit); // 失败兜底保存原话
+    } finally { 
+      setIdeaModal('hidden');
+      setIdeaInput(""); 
+    }
   };
 
   useEffect(() => {
@@ -436,7 +453,7 @@ const CabinUI = ({
               {ideaModal === 'typing' && (
                 <div className="flex flex-col w-full relative z-10">
                   <textarea autoFocus value={ideaInput} onChange={(e) => setIdeaInput(e.target.value)} placeholder="在这里输入你的碎片灵感..." className="w-full h-32 bg-white/5 border border-white/10 rounded-2xl p-4 text-white/90 placeholder-white/30 focus:outline-none focus:border-[#4FACFE]/50 transition-colors resize-none mb-6" />
-                  <button onClick={submitIdea} disabled={!ideaInput.trim()} className="w-full py-4 rounded-xl bg-[#4FACFE]/20 text-[#4FACFE] tracking-widest font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#4FACFE]/30 transition-all">
+                  <button onClick={() => submitIdea(ideaInput)} disabled={!ideaInput.trim()} className="w-full py-4 rounded-xl bg-[#4FACFE]/20 text-[#4FACFE] tracking-widest font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#4FACFE]/30 transition-all">
                     存入卡片
                   </button>
                 </div>
