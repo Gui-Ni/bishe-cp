@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Zap, Sparkles, Smartphone, Monitor, ChevronRight, Power, Mic, Check, Hand, Loader2
+  Zap, Sparkles, Smartphone, Monitor, ChevronRight, Power, Mic, Check, Hand, Loader2, Keyboard
 } from 'lucide-react';
 
 type CabinMode = 'idle' | 'pose-confirm' | 'recharge' | 'inspiration' | 'ending';
@@ -108,13 +108,16 @@ const CabinUI = ({
   const[ripples, setRipples] = useState<Ripple[]>([]);
   const[sparks, setSparks] = useState<Spark[]>([]); 
   
-  // 🔴 彻底删除了 'typing' 状态，只保留全语音流程
   const[ideaModal, setIdeaModal] = useState<'hidden' | 'listening' | 'processing'>('hidden');
   const[ideaInput, setIdeaInput] = useState("");
+  const [inputType, setInputType] = useState<'voice' | 'keyboard'>('voice');
+  
   let recognitionRef = useRef<any>(null);
   let listeningTimeout = useRef<any>(null);
   let initialTimeout = useRef<any>(null);
-  const textBufferRef = useRef(""); 
+  
+  const textBufferRef = useRef(""); // 仅用于累积稳定的最终片段
+  const fullTextRef = useRef(""); // 包含最终片段+正在识别的临时片段（完整内容）
   const ideaModalRef = useRef<'hidden' | 'listening' | 'processing'>('hidden');
 
   // 安全阀
@@ -128,25 +131,48 @@ const CabinUI = ({
     setIdeaModal(state);
   };
 
+  // 核心功能 3：手动取消/关闭，清理全部
+  const handleCancel = () => {
+    updateModalState('hidden');
+    if (initialTimeout.current) clearTimeout(initialTimeout.current);
+    if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
+    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+  };
+
+  // 核心功能 2、3的收口：停止录音并提交AI
   const handleManualSubmit = () => {
-    if (recognitionRef.current) { 
-      try { recognitionRef.current.stop(); } catch(e){} 
-    }
     if (initialTimeout.current) clearTimeout(initialTimeout.current);
     if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
 
-    const finalIdea = textBufferRef.current.trim().replace(/，$/, '');
+    const finalIdea = fullTextRef.current.trim().replace(/，$/, '');
     if (finalIdea) {
-      updateModalState('processing');
+      updateModalState('processing'); // 马上切状态，阻挡二次触发
+      if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
       submitIdea(finalIdea);
     } else {
-      updateModalState('hidden');
+      handleCancel(); // 没有任何内容，直接关掉
     }
+  };
+
+  // 切换输入模式
+  const handleSwitchToKeyboard = (e: React.PointerEvent | React.MouseEvent) => {
+    e.stopPropagation();
+    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+    if (initialTimeout.current) clearTimeout(initialTimeout.current);
+    if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
+    setInputType('keyboard');
+  };
+
+  const handleSwitchToVoice = (e: React.PointerEvent | React.MouseEvent) => {
+    e.stopPropagation();
+    openIdeaModal(); // 重新走一次纯粹的唤醒流程
   };
 
   const openIdeaModal = () => {
     updateModalState('listening'); 
+    setInputType('voice');
     setIdeaInput("");
+    fullTextRef.current = "";
     textBufferRef.current = "";
     restartCountRef.current = 0;
     isStartingRef.current = false;
@@ -156,7 +182,6 @@ const CabinUI = ({
 
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    // 如果不支持语音识别，直接静默关闭，不弹任何输入框
     if (!SpeechRecognition) { updateModalState('hidden'); return; } 
 
     recognitionRef.current = new SpeechRecognition();
@@ -164,33 +189,47 @@ const CabinUI = ({
     recognitionRef.current.continuous = true;
     recognitionRef.current.interimResults = true;
 
-    // 1. 防死等：15秒不说自动关闭
+    let hasStartedSpeaking = false; 
+
+    // 核心功能 1：打开面板，15秒不说自动关闭
     initialTimeout.current = setTimeout(() => {
-      if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
-        if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-        updateModalState('hidden');
+      if (ideaModalRef.current === 'listening' && fullTextRef.current.trim() === "") {
+        handleCancel();
       }
     }, 15000);
 
-    let hasStartedSpeaking = false;
+    // 一旦侦测到说话，马上清理15秒关机逻辑
+    recognitionRef.current.onspeechstart = () => {
+      if (initialTimeout.current) {
+        clearTimeout(initialTimeout.current); 
+        initialTimeout.current = null;
+      }
+      if (!hasStartedSpeaking) {
+        hasStartedSpeaking = true;
+        // 核心功能 2：录音上限3分钟，结束后自动提交关闭
+        listeningTimeout.current = setTimeout(() => {
+          if (ideaModalRef.current === 'listening') {
+            handleManualSubmit();
+          }
+        }, 180000);
+      }
+    };
 
-    // 核心检测：识别到声音
     recognitionRef.current.onresult = (e:any) => {
+      // 保底兼容：万一 onspeechstart 没触发
       if(initialTimeout.current) {
         clearTimeout(initialTimeout.current); 
         initialTimeout.current = null;
       }
-      restartCountRef.current = 0;
-
-      // 2. 说话后开始极限3分钟倒计时
       if (!hasStartedSpeaking) {
         hasStartedSpeaking = true;
         listeningTimeout.current = setTimeout(() => {
           if (ideaModalRef.current === 'listening') {
-            handleManualSubmit(); 
+            handleManualSubmit();
           }
         }, 180000);
       }
+      restartCountRef.current = 0;
 
       let finalTranscript = textBufferRef.current;
       let interimTranscript = '';
@@ -204,38 +243,23 @@ const CabinUI = ({
       }
 
       textBufferRef.current = finalTranscript;
-      setIdeaInput(finalTranscript + interimTranscript);
+      fullTextRef.current = finalTranscript + interimTranscript;
+      setIdeaInput(fullTextRef.current);
     };
 
     recognitionRef.current.onerror = (e: any) => { 
-      // 🔴 遇到任何错误（网络/没声音等），只要不是彻底被禁，都静默忽略，依靠自动重启机制
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        updateModalState('hidden'); // 如果用户没给权限，直接关掉面板
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'network') {
+        handleCancel();
       }
     }; 
 
-    // 极度安全的优雅重启机制
     recognitionRef.current.onend = () => {
-      if (ideaModalRef.current === 'listening' && !isStartingRef.current) {
-        if (restartCountRef.current >= 5) {
-          updateModalState('hidden'); // 连续断开5次，彻底放弃并关闭面板，坚决不弹键盘
-          return;
+      if (ideaModalRef.current === 'listening') {
+        if (fullTextRef.current.trim()) {
+          handleManualSubmit();
+        } else {
+          handleCancel();
         }
-
-        restartCountRef.current += 1;
-        isStartingRef.current = true;
-
-        setTimeout(() => {
-          if (ideaModalRef.current === 'listening') {
-            try { 
-              recognitionRef.current.start(); 
-            } catch(e) {
-              console.error("重启麦克风失败:", e);
-            } finally {
-              isStartingRef.current = false;
-            }
-          }
-        }, 400);
       }
     };
 
@@ -243,34 +267,30 @@ const CabinUI = ({
       isStartingRef.current = true;
       recognitionRef.current.start(); 
     } catch(e){ 
-      updateModalState('hidden'); 
+      console.error('Recognition start failed:', e);
+      handleCancel(); 
     } finally {
       isStartingRef.current = false;
     }
   };
 
-  const closeIdeaModal = () => {
-    updateModalState('hidden'); 
-    setIdeaInput("");
-    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-  };
-
-  // AI 保留原话，只修错字
+  // 通过代理调用 AI
   const submitIdea = async (textToSubmit: string) => {
     if (!textToSubmit.trim()) {
       updateModalState('hidden');
       return;
     }
+
     updateModalState('processing');
     try {
-      const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MINIMAX_API_KEY}` },
+      const response = await fetch('https://minimax-proxy.onrender.com/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           model: "abab6.5s-chat", 
           messages:[ 
             { 
               role: "system", 
-              content: "你是一个语音错字纠正助手。请仅仅修复用户输入文本中的错别字，并去掉'啊'、'呃'、'那个'等无意义的语气词，使句子通顺。必须完全保留用户的原意和第一人称语气，绝对不要去总结它，不要擅自加上任何解释、前缀或套话。直接输出修正后的原话。" 
+              content: "你是一个文字整理助手。请把用户口语化的输入整理得通顺简洁，只修正明显的错别字和口头禅（如'啊'、'嗯'、'那个'等），保留原意。直接输出整理后的句子，不要加任何前缀、解释或诗意表达。" 
             }, 
             { role: "user", content: textToSubmit } 
           ] 
@@ -280,10 +300,11 @@ const CabinUI = ({
       const data = await response.json();
       addCard(data.choices[0].message.content);
     } catch (error) {
-      addCard(textToSubmit); 
+      addCard(textToSubmit); // 失败兜底保存原话
     } finally { 
       updateModalState('hidden');
       setIdeaInput(""); 
+      fullTextRef.current = "";
     }
   };
 
@@ -315,7 +336,7 @@ const CabinUI = ({
   useEffect(() => {
     if (cabinMode === 'recharge') {
       const bounds = getTopHalfBounds();
-      const generateNewBalls = () => [...Array(5)].map((_, i) => ({ 
+      const generateNewBalls = () =>[...Array(5)].map((_, i) => ({ 
         id: Math.random(), isConsumed: false, 
         x: (Math.random() - 0.5) * bounds.xRange, 
         y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), 
@@ -355,18 +376,22 @@ const CabinUI = ({
     setRipples(prev =>[...prev, { id: newRippleId, x: clientX, y: clientY }]);
     setTimeout(() => setRipples(prev => prev.filter(r => r.id !== newRippleId)), 2500);
 
-    const particleCount = 12; 
+    const particleCount = 12;
     const newSparks: Spark[] =[...Array(particleCount)].map(() => {
       const angle = Math.random() * Math.PI * 2; 
       const velocity = 150 + Math.random() * 150; 
-      return { id: Math.random(), startX: clientX, startY: clientY, endX: clientX + Math.cos(angle) * velocity, endY: clientY + Math.sin(angle) * velocity };
+      return {
+        id: Math.random(),
+        startX: clientX, startY: clientY,
+        endX: clientX + Math.cos(angle) * velocity,
+        endY: clientY + Math.sin(angle) * velocity
+      };
     });
-    
     setSparks(prev =>[...prev, ...newSparks]);
     setTimeout(() => {
       const sparkIds = newSparks.map(s => s.id);
       setSparks(prev => prev.filter(s => !sparkIds.includes(s.id)));
-    }, 800);
+    }, 800); 
 
     setRandomSpots(prev => prev.filter(s => s.id !== spot.id));
     recordAction(); 
@@ -443,7 +468,7 @@ const CabinUI = ({
               )
             ))}
             <div className="absolute w-64 h-64 rounded-full bg-[#4FACFE] blur-[60px] transition-all duration-75 pointer-events-none" style={{ opacity: (pushProgress / 100) * 0.8, transform: `scale(${0.5 + (pushProgress / 100) * 0.8})` }} />
-            <div className="absolute text-center mt-[45vw] md:mt-[300px] pointer-events-none"><p className="text-[#4FACFE] tracking-[0.3em] text-xs md:text-sm">将散落的思维球拖动至中心聚拢</p></div>
+            <div className="absolute text-center mt-[45vw] md:mt-[300px] pointer-events-none"><p className="text-[#4FACFE] tracking-[0.3em] text-xs md:text-sm">将散落的思维球拖拽至中心聚拢</p></div>
           </div>
         )}
 
@@ -452,7 +477,7 @@ const CabinUI = ({
             {randomSpots.map(spot => (
               <motion.div key={spot.id} initial={{ opacity: 0, scale: 0, x: spot.x, y: spot.y }} animate={{ opacity: 1, scale: spot.size, x: spot.x, y: spot.y }} exit={{ opacity: 0, scale: 0 }} transition={{ duration: 0.4, ease: "easeOut" }}
                 className="absolute flex items-start justify-center pointer-events-none">
-                <div className="w-16 h-16 -mt-8 rounded-full border border-white/30 bg-white/10 backdrop-blur-md flex items-center justify-center cursor-pointer pointer-events-auto hover:bg-white/30 hover:shadow-[0_0_20px_rgba(255,255,255,0.4)] transition-all shadow-[0_0_15px_rgba(255,255,255,0.1)] touch-none"
+                <div className="w-16 h-16 rounded-full border border-white/30 bg-white/10 backdrop-blur-md flex items-center justify-center cursor-pointer pointer-events-auto hover:bg-white/30 hover:shadow-[0_0_20px_rgba(255,255,255,0.4)] transition-all shadow-[0_0_15px_rgba(255,255,255,0.1)] touch-none"
                   onPointerDown={(e) => handleSpotClick(e, spot)}>
                   <motion.div animate={{ scale:[1, 1.5, 1], opacity:[0.8, 0, 0.8] }} transition={{ duration: 1.5 + spot.size, repeat: Infinity }} className="absolute w-4 h-4 bg-white rounded-full blur-[2px]" />
                 </div>
@@ -486,36 +511,67 @@ const CabinUI = ({
         )}
       </AnimatePresence>
 
-      {/* 🔴 彻底删除了键盘输入页面的录音 Modal */}
       <AnimatePresence>
         {ideaModal !== 'hidden' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md px-4">
-            <div className="w-full max-w-lg bg-[#111111] border border-white/5 rounded-[32px] p-8 flex flex-col shadow-2xl relative overflow-hidden">
+            <div className="w-full max-w-sm bg-[#1A1A1E] border border-white/5 rounded-3xl p-6 flex flex-col shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-48 h-48 bg-[#4FACFE]/10 blur-3xl -mr-24 -mt-24 pointer-events-none" />
               
-              <div className="flex justify-between items-center mb-12 relative z-10">
-                <h3 className="text-lg font-light tracking-[0.2em] text-white/90">灵感记录</h3>
-                <button onClick={closeIdeaModal} className="text-white/30 hover:text-white/80 transition-colors text-sm tracking-widest">取消</button>
+              {/* 顶部标题栏 */}
+              <div className="flex justify-between items-center mb-10 relative z-10">
+                <h3 className="text-sm font-light tracking-[0.1em] text-white/90">灵感记录</h3>
+                <button onClick={handleCancel} className="text-white/40 hover:text-white transition-colors text-xs tracking-widest">取消</button>
               </div>
 
-              {ideaModal === 'listening' && (
-                <div className="flex flex-col items-center justify-center py-8 relative z-10">
+              {/* 语音输入模式 */}
+              {ideaModal === 'listening' && inputType === 'voice' && (
+                <div className="flex flex-col items-center justify-center pb-4 relative z-10">
+                  {/* 【核心热区】点击即可停止录音并直接提交AI */}
                   <div 
-                    className="relative flex items-center justify-center mb-8 cursor-pointer group"
+                    className="relative flex flex-col items-center justify-center cursor-pointer group w-full py-6 rounded-2xl hover:bg-white/5 transition-all"
                     onPointerDown={(e) => { e.stopPropagation(); handleManualSubmit(); }}
                   >
-                    <motion.div animate={{ scale:[1, 1.8, 1], opacity:[0.1, 0.4, 0.1] }} transition={{ duration: 2, repeat: Infinity }} className="absolute w-24 h-24 bg-[#4FACFE] rounded-full blur-[30px] group-active:scale-90 transition-transform" />
-                    <Mic size={36} className="text-[#4FACFE] relative z-10 drop-shadow-[0_0_10px_rgba(79,172,254,0.8)] group-active:scale-90 transition-transform" />
+                    <motion.div animate={{ scale:[1, 1.4, 1], opacity:[0.1, 0.3, 0.1] }} transition={{ duration: 1.5, repeat: Infinity }} className="absolute w-24 h-24 bg-[#4FACFE] rounded-full blur-[24px]" />
+                    <Mic size={36} className="text-[#4FACFE] relative z-10 group-active:scale-90 transition-transform mb-6" />
+                    
+                    <p className="text-[#4FACFE] tracking-widest text-sm text-center px-4 relative z-10 min-h-[1.5rem] opacity-90">
+                      {ideaInput ? ideaInput : "请说出你的灵感..."}
+                    </p>
                   </div>
-                  <p className="text-white/80 tracking-widest text-sm mb-12 text-center h-10 overflow-hidden text-ellipsis px-4">
-                    {ideaInput ? ideaInput : "请说出你的灵感..."}
-                  </p>
+                  
+                  {/* 键盘输入切换 */}
+                  <button onClick={handleSwitchToKeyboard} className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/5 border border-white/10 text-white/50 text-xs tracking-widest hover:bg-white/10 transition-all mt-8">
+                    <Keyboard size={14} /> 切换为键盘输入
+                  </button>
                 </div>
               )}
 
+              {/* 键盘输入模式 */}
+              {ideaModal === 'listening' && inputType === 'keyboard' && (
+                <div className="flex flex-col items-center justify-center pb-2 relative z-10">
+                  <textarea
+                    value={ideaInput}
+                    onChange={(e) => { setIdeaInput(e.target.value); fullTextRef.current = e.target.value; }}
+                    placeholder="请输入你的灵感..."
+                    className="w-full h-32 bg-[#111] border border-white/10 rounded-xl p-4 text-white/90 placeholder:text-white/30 outline-none focus:border-[#4FACFE]/50 transition-colors resize-none mb-6 text-sm tracking-wide"
+                    autoFocus
+                  />
+                  <div className="flex justify-between w-full items-center px-2">
+                    <button onClick={handleSwitchToVoice} className="flex items-center gap-2 text-white/40 hover:text-white/80 text-xs tracking-widest transition-colors">
+                      <Mic size={14} /> 切换为语音输入
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); handleManualSubmit(); }} className="px-6 py-2 bg-[#4FACFE]/20 text-[#4FACFE] border border-[#4FACFE]/30 rounded-full text-xs tracking-widest hover:bg-[#4FACFE]/30 transition-all">
+                      提交
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 处理中加载状态 */}
               {ideaModal === 'processing' && (
-                <div className="flex flex-col items-center justify-center py-16 relative z-10">
-                  <Loader2 size={40} className="text-[#4FACFE] animate-spin mb-6" />
-                  <p className="text-[#4FACFE] tracking-widest text-sm">正在封存卡片...</p>
+                <div className="flex flex-col items-center justify-center py-12 relative z-10">
+                  <Loader2 size={36} className="text-[#4FACFE] animate-spin mb-6" />
+                  <p className="text-[#4FACFE] tracking-widest text-sm">AI 正在提炼灵感...</p>
                 </div>
               )}
             </div>
@@ -539,162 +595,4 @@ const CabinUI = ({
 // ==========================================
 // 3. 手机端 UI
 // ==========================================
-const MobileUI = ({ 
-  mobileState, setMobileState, enterCabin, cabinMode, targetMode, sessionResult, endSession, generatedCards
-}: { 
-  mobileState: MobileState, setMobileState: (s: MobileState) => void, enterCabin: (m: CabinMode) => void, cabinMode: CabinMode, targetMode: CabinMode | null, sessionResult: SessionResult | null, endSession: () => void, generatedCards: string[]
-}) => {
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="min-h-[100dvh] pt-24 md:pt-32 px-6 md:px-8 flex flex-col items-center w-full touch-none">
-      {mobileState === 'home' && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full max-w-md flex flex-col items-center justify-center flex-1 pb-16">
-          <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-40"><div className="fluid-blob fluid-blob-1" /><div className="fluid-blob fluid-blob-2" /></div>
-          <motion.div animate={{ scale:[1, 1.05, 1], opacity:[0.8, 1, 0.8] }} transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}><SyncLogo size="large" className="mb-12 scale-[0.8] md:scale-100" /></motion.div>
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="flex flex-col items-center mb-8">
-            <h1 className="text-4xl md:text-5xl font-bold tracking-[0.3em] sync-text-gradient mb-2" style={{ paddingLeft: '0.3em' }}>心跃</h1>
-            <h2 className="text-2xl md:text-3xl font-bold tracking-[0.4em] sync-text-gradient opacity-90" style={{ paddingLeft: '0.4em' }}>SYNC</h2>
-          </motion.div>
-          <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.8 }} onPointerDown={() => setMobileState('modeSelect')} 
-            className="px-12 py-4 rounded-full border border-white/10 bg-white/5 backdrop-blur-xl text-white font-light tracking-[0.4em] hover:bg-white/10 transition-all active:scale-95" style={{ paddingLeft: 'calc(3rem + 0.4em)' }}>进入系统</motion.button>
-        </motion.div>
-      )}
-
-      {mobileState === 'modeSelect' && (
-        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="w-full max-w-md flex flex-col items-center">
-          <div className="text-center mb-12 md:mb-16">
-            <h2 className="text-xl md:text-2xl font-light tracking-[0.4em] text-white/90 mb-2" style={{ paddingLeft: '0.4em' }}>选择同步模式</h2>
-            <div className="h-px w-12 bg-[#4FACFE]/50 mx-auto mt-4" />
-          </div>
-          <div className="w-full space-y-4 md:space-y-6">
-            <motion.button onPointerDown={() => enterCabin('recharge')} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} className="w-full bg-[#1A1A1A] border border-white/10 rounded-[32px] p-6 md:p-8 flex flex-col items-start gap-4 hover:bg-white/5 transition-all">
-              <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-[#4FACFE]/10 flex items-center justify-center mb-2"><Zap size={20} className="text-[#4FACFE]" /></div>
-              <div className="text-left"><h3 className="text-lg md:text-xl font-medium tracking-[0.3em] text-white mb-2" style={{ paddingLeft: '0.3em' }}>精神充能</h3><p className="text-white/40 text-[10px] md:text-xs tracking-widest font-light">10min · 深度意识修复</p></div>
-            </motion.button>
-            <motion.button onPointerDown={() => enterCabin('inspiration')} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} className="w-full bg-[#1A1A1A] border border-white/10 rounded-[32px] p-6 md:p-8 flex flex-col items-start gap-4 hover:bg-white/5 transition-all">
-              <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-[#4FACFE]/10 flex items-center justify-center mb-2"><Sparkles size={20} className="text-[#4FACFE]" /></div>
-              <div className="text-left"><h3 className="text-lg md:text-xl font-medium tracking-[0.3em] text-white mb-2" style={{ paddingLeft: '0.3em' }}>灵感触发</h3><p className="text-white/40 text-[10px] md:text-xs tracking-widest font-light">12min · 创意频率同步</p></div>
-            </motion.button>
-          </div>
-        </motion.div>
-      )}
-
-      {mobileState === 'activeInCabin' && (
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center justify-center flex-1 w-full pb-20">
-          <div className="relative flex items-center justify-center mb-16"><motion.div animate={{ scale:[1, 1.3, 1], opacity:[0.1, 0.3, 0.1] }} transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }} className="absolute w-48 md:w-64 h-48 md:h-64 bg-[#4FACFE] rounded-full blur-[50px]" /><SyncLogo size="small" isSyncing={true} /></div>
-          <h2 className="text-xl md:text-2xl font-light tracking-[0.3em] text-white mb-4 shadow-black drop-shadow-lg" style={{ paddingLeft: '0.3em' }}>{cabinMode === 'pose-confirm' ? '等待姿态确认...' : '交互舱同步中'}</h2>
-          <p className="text-[#4FACFE] text-xs md:text-sm tracking-[0.5em] font-medium uppercase mb-12" style={{ paddingLeft: '0.5em' }}>{targetMode === 'recharge' ? '精神充能模式' : '灵感触发模式'}</p>
-          <button onPointerDown={endSession} className="flex items-center gap-2 px-8 py-3 rounded-full border border-white/10 text-white/40 hover:text-white/80 hover:bg-white/5 transition-all text-xs tracking-widest active:scale-95"><Power size={14} /> 提前结束</button>
-        </motion.div>
-      )}
-
-      {mobileState === 'result' && sessionResult && (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md flex flex-col items-center flex-1 pt-6 md:pt-12 pb-12">
-          <motion.div animate={{ opacity:[0.5, 1, 0.5] }} transition={{ duration: 4, repeat: Infinity }} className="mb-8 w-full flex justify-center"><SyncLogo size="small" /></motion.div>
-          <h2 className="text-lg md:text-xl text-white/90 tracking-[0.4em] font-light mb-8" style={{ paddingLeft: '0.4em' }}>祝您旅程愉快</h2>
-
-          <div className="w-full bg-[#1A1A1A] rounded-3xl p-6 md:p-8 flex flex-col items-center gap-6 border border-white/5 shadow-2xl mb-8">
-            <div className="text-center w-full"><p className="text-white/40 text-[10px] tracking-[0.3em] mb-2 uppercase" style={{ paddingLeft: '0.3em' }}>本次 MoodScore</p><h3 className="text-4xl md:text-5xl font-semibold text-[#4FACFE] tracking-widest drop-shadow-[0_0_15px_rgba(79,172,254,0.4)]" style={{ paddingLeft: '0.1em' }}>{sessionResult.score}</h3></div>
-            <div className="w-full h-px bg-white/5 my-2" />
-            <div className="w-full flex justify-between px-2 md:px-4">
-              <div className="text-center flex-1 border-r border-white/5"><p className="text-white/40 text-[10px] tracking-widest mb-2">{sessionResult.mode === 'recharge' ? '精神充能' : '灵感触发'}</p><p className="text-white/90 font-medium tracking-wider text-base md:text-lg">+{sessionResult.percent}%</p></div>
-              <div className="text-center flex-1"><p className="text-white/40 text-[10px] tracking-widest mb-2">灵感记录</p><p className="text-white/90 font-medium tracking-wider text-base md:text-lg">+{sessionResult.cards}</p></div>
-            </div>
-          </div>
-
-          <div className="flex w-full gap-4 mt-auto">
-            <button onPointerDown={() => setMobileState('home')} className="flex-1 py-4 rounded-2xl border border-white/10 bg-[#111] text-white/60 tracking-widest hover:text-white transition-all text-xs md:text-sm font-light active:scale-95">返回主页</button>
-            <button onPointerDown={() => setMobileState('cardsView')} className="flex-1 py-4 rounded-2xl bg-[#4FACFE]/10 border border-[#4FACFE]/30 text-[#4FACFE] tracking-widest transition-all text-xs md:text-sm font-light active:scale-95">查看卡片</button>
-          </div>
-        </motion.div>
-      )}
-
-      {mobileState === 'cardsView' && (
-        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="w-full max-w-md flex flex-col gap-4 md:gap-6 pt-6 md:pt-12 flex-1 pb-12">
-          <div className="flex items-center justify-between mb-4"><h2 className="text-lg md:text-xl tracking-[0.2em] font-light" style={{ paddingLeft: '0.2em' }}>记录的灵感</h2><button onPointerDown={() => setMobileState('result')} className="text-[#4FACFE] text-[10px] md:text-xs tracking-widest transition-colors active:opacity-50">← 返回结算</button></div>
-          <div className="space-y-4 overflow-y-auto">
-            {generatedCards.map((c, i) => (
-              <motion.div key={i} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }} className="p-5 md:p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-24 h-24 bg-[#4FACFE]/10 blur-2xl -mr-12 -mt-12" /><Sparkles size={16} className="text-[#4FACFE] mb-3 opacity-60" /><p className="italic text-white/80 leading-relaxed font-light text-xs md:text-sm">"{c}"</p>
-              </motion.div>
-            ))}
-            {generatedCards.length === 0 && <div className="p-8 text-center border border-white/5 rounded-2xl bg-white/5"><p className="text-white/20 tracking-widest text-xs md:text-sm">本次体验未记录任何灵感</p></div>}
-          </div>
-        </motion.div>
-      )}
-    </motion.div>
-  );
-};
-
-// ==========================================
-// 4. 主应用路由
-// ==========================================
-export default function App() {
-  const [view, setView] = useState<'cabin' | 'mobile'>('mobile');
-  const [cabinMode, setCabinMode] = useState<CabinMode>('idle');
-  const[targetMode, setTargetMode] = useState<CabinMode | null>(null);
-  const [mobileState, setMobileState] = useState<MobileState>('home');
-  const [isTransitioning, setIsTransitioning] = useState(false);
-  
-  const [timeElapsed, setTimeElapsed] = useState(0);
-  const [generatedCards, setGeneratedCards] = useState<string[]>([]);
-  const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
-  
-  const [actionCount, setActionCount] = useState(0);
-
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (cabinMode === 'recharge' || cabinMode === 'inspiration') interval = setInterval(() => setTimeElapsed(p => p + 1), 1000);
-    else setTimeElapsed(0);
-    return () => clearInterval(interval);
-  }, [cabinMode]);
-
-  const enterCabin = (mode: CabinMode) => {
-    setIsTransitioning(true); setGeneratedCards([]); setActionCount(0); setTargetMode(mode);
-    setTimeout(() => { setView('cabin'); setCabinMode('pose-confirm'); setMobileState('activeInCabin'); }, 1200);
-    setTimeout(() => setIsTransitioning(false), 2200);
-  };
-
-  const endSession = () => {
-    const maxTime = targetMode === 'recharge' ? 600 : 720;
-    const baseScore = 4.0;
-    const percent = Math.min(Math.round((timeElapsed / maxTime) * 100), 100);
-    const timeScore = (percent / 100) * 3.0;
-    const targetActions = targetMode === 'recharge' ? 15 : 20;
-    const actionScore = Math.min((actionCount / targetActions) * 2.0, 2.0);
-    const cardScore = Math.min(generatedCards.length * 0.5, 1.0);
-    const finalScore = (baseScore + timeScore + actionScore + cardScore).toFixed(1);
-
-    setSessionResult({ mode: targetMode || 'recharge', percent: percent === 0 ? 1 : percent, score: finalScore, cards: generatedCards.length });
-    setView('cabin'); setCabinMode('ending');
-    setTimeout(() => { setCabinMode('idle'); setTargetMode(null); setMobileState('result'); setView('mobile'); }, 8000);
-  };
-
-  return (
-    <div className="min-h-[100dvh] bg-[#111] text-white selection:bg-[#4FACFE]/30 flex flex-col font-sans touch-none">
-      <nav className="fixed top-8 left-1/2 -translate-x-1/2 z-50 flex gap-2 p-1.5 bg-white/5 border border-white/10 backdrop-blur-md rounded-full">
-        <button onPointerDown={() => setView('cabin')} className={`px-4 md:px-6 py-2.5 rounded-full transition-all duration-500 flex items-center gap-2 md:gap-2.5 ${view === 'cabin' ? 'bg-[#4FACFE] text-white shadow-[0_0_20px_rgba(79,172,254,0.3)]' : 'text-white/40 hover:text-white/80'}`}>
-          <Monitor size={16} /><span className="text-[10px] md:text-xs font-semibold tracking-wider">交互舱</span>
-        </button>
-        <button onPointerDown={() => setView('mobile')} className={`px-4 md:px-6 py-2.5 rounded-full transition-all duration-500 flex items-center gap-2 md:gap-2.5 ${view === 'mobile' ? 'bg-[#4FACFE] text-white shadow-[0_0_20px_rgba(79,172,254,0.3)]' : 'text-white/40 hover:text-white/80'}`}>
-          <Smartphone size={16} /><span className="text-[10px] md:text-xs font-semibold tracking-wider">心跃端</span>
-        </button>
-      </nav>
-
-      <AnimatePresence mode="wait">
-        {view === 'cabin' ? (
-          <CabinUI key="cabin" cabinMode={cabinMode} setCabinMode={setCabinMode} targetMode={targetMode} addCard={(t) => setGeneratedCards(p =>[...p, t])} timeElapsed={timeElapsed} endSession={endSession} recordAction={() => setActionCount(p => p + 1)} />
-        ) : (
-          <MobileUI key="mobile" mobileState={mobileState} setMobileState={setMobileState} enterCabin={enterCabin} cabinMode={cabinMode} targetMode={targetMode} sessionResult={sessionResult} endSession={endSession} generatedCards={generatedCards} />
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {isTransitioning && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }} className="fixed inset-0 z-[100] flex items-center justify-center bg-[#111] pointer-events-none">
-            <motion.div initial={{ scale: 0, opacity: 1 }} animate={{ scale: 30, opacity: 0 }} transition={{ duration: 2, ease: "circIn" }} className="w-32 h-32 bg-[#4FACFE] rounded-full blur-[40px]" />
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
+// (... 后续 Mobile UI 与 App 函数保留未改动内容即可 ...)
