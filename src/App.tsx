@@ -180,17 +180,20 @@ const CabinUI = ({
     };
 
     recognitionRef.current.onerror = (e: any) => { 
-      if (e.error !== 'no-speech') updateModalState('typing'); 
+      // 只在明显错误时切换到打字模式，忽略静音错误
+      if (e.error === 'network' || e.error === 'aborted') {
+        updateModalState('typing');
+      }
+      // no-speech 等错误不处理，继续监听
     }; 
 
-    recognitionRef.current.onend = () => { 
-      // 如果因为系统原因自动断开，但我们还在录制阶段（说明没到8秒），强行把它重启
-      if (ideaModalRef.current === 'listening') {
-        try { recognitionRef.current.start(); } catch(e){}
-      }
-    };
+    // 移除 onend 自动重启逻辑，让它自然结束就好
+    // recognition 会在需要时自动重启
 
-    try { recognitionRef.current.start(); } catch(e){ updateModalState('typing'); }
+    try { recognitionRef.current.start(); } catch(e){ 
+      console.error('Recognition start failed:', e);
+      updateModalState('typing'); 
+    }
   };
 
   const closeIdeaModal = () => {
