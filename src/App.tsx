@@ -130,33 +130,42 @@ const CabinUI = ({
       mediaRecorderRef.current.stop();
     }
 
-    // 等待最后数据
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // 等待最后数据收集
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
     // 发送到后端识别
     if (audioChunksRef.current.length > 0) {
       const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
       audioChunksRef.current = [];
 
-      const reader = new FileReader();
-      reader.readAsDataURL(audioBlob);
-      reader.onloadend = async () => {
-        const base64Audio = reader.result;
-        try {
-          const response = await fetch('https://minimax-proxy.onrender.com/voice', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ audio: base64Audio })
-          });
-          if (response.ok) {
-            const data = await response.json();
-            if (data.text) submitIdea(data.text);
-            else updateModalState('hidden');
+      // 转换为 base64
+      const base64Audio = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(audioBlob);
+      });
+
+      try {
+        const response = await fetch('https://minimax-proxy.onrender.com/voice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audio: base64Audio })
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.text) {
+            submitIdea(data.text);
           } else {
             updateModalState('hidden');
           }
-        } catch (e) { updateModalState('hidden'); }
-      };
+        } else {
+          updateModalState('hidden');
+        }
+      } catch (e) { 
+        console.error(e);
+        updateModalState('hidden'); 
+      }
     } else {
       updateModalState('hidden');
     }
