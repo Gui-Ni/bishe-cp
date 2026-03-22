@@ -8,7 +8,7 @@ type CabinMode = 'idle' | 'pose-confirm' | 'recharge' | 'inspiration' | 'ending'
 type MobileState = 'home' | 'modeSelect' | 'activeInCabin' | 'result' | 'cardsView';
 
 interface Ripple { id: number; x: number; y: number; }
-interface Spark { id: number; x: number; y: number; } // 重新引入火花粒子
+interface Spark { id: number; startX: number; startY: number; endX: number; endY: number; }
 interface EnergyBall { id: number; isConsumed: boolean; x: number; y: number; size: number; }
 interface SessionResult { mode: string; percent: number; score: string; cards: number; }
 
@@ -239,13 +239,23 @@ const CabinUI = ({
     setRipples(prev =>[...prev, { id: newRippleId, x: clientX, y: clientY }]);
     setTimeout(() => setRipples(prev => prev.filter(r => r.id !== newRippleId)), 2500);
 
-    // 2. 产生向外发射的火花飞溅效果 (Sparks)
-    const newSparks = [...Array(6)].map(() => ({ id: Math.random(), x: clientX, y: clientY }));
+    // 2. 生成向外发射的火花 (Sparks)，12颗粒子呈放射状炸开
+    const particleCount = 12;
+    const newSparks: Spark[] = [...Array(particleCount)].map(() => {
+      const angle = Math.random() * Math.PI * 2; // 随机角度
+      const velocity = 150 + Math.random() * 150; // 随机弹射距离
+      return {
+        id: Math.random(),
+        startX: clientX, startY: clientY,
+        endX: clientX + Math.cos(angle) * velocity,
+        endY: clientY + Math.sin(angle) * velocity
+      };
+    });
     setSparks(prev => [...prev, ...newSparks]);
     setTimeout(() => {
       const sparkIds = newSparks.map(s => s.id);
       setSparks(prev => prev.filter(s => !sparkIds.includes(s.id)));
-    }, 1000);
+    }, 800); // 0.8秒后火花消失
 
     // 移除被点击的球并计分
     setRandomSpots(prev => prev.filter(s => s.id !== spot.id));
@@ -347,17 +357,13 @@ const CabinUI = ({
          <SyncLogo className="mb-24 scale-[0.6] md:scale-[0.8]" isSyncing={pushProgress > 20 || cabinMode === 'inspiration'} />
       </div>
 
-      {/* 【修复】：把涟漪和向外发射的火花渲染在这里 */}
+      {/* 发射特效层 */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
         {ripples.map(ripple => <div key={ripple.id} className="ripple" style={{ left: ripple.x, top: ripple.y }} />)}
         {sparks.map(spark => (
           <motion.div key={spark.id}
-            initial={{ scale: 0, opacity: 1, x: spark.x, y: spark.y }}
-            animate={{
-              scale: [0, 1.5, 0], opacity: [1, 1, 0],
-              x: spark.x + (Math.random() - 0.5) * 200, 
-              y: spark.y + (Math.random() - 0.5) * 200  // 向四周随机飞溅
-            }}
+            initial={{ scale: 1, opacity: 1, x: spark.startX, y: spark.startY }}
+            animate={{ scale: 0, opacity: 0, x: spark.endX, y: spark.endY }}
             transition={{ duration: 0.6, ease: "easeOut" }}
             className="absolute w-3 h-3 bg-white rounded-full blur-[1px] shadow-[0_0_15px_#4FACFE]"
           />
