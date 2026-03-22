@@ -218,14 +218,20 @@ const CabinUI = ({
   const handleSpotClick = (e: React.MouseEvent | React.TouchEvent, spot: {id: number, x: number, y: number, size: number}) => {
     if (cabinMode !== 'inspiration') return;
     
-    // 【修复 2】：触发绝美绽放动效
-    setBlooms(prev =>[...prev, { id: Math.random(), x: spot.x, y: spot.y, size: spot.size }]);
-    // 1秒后清理绽放DOM
-    setTimeout(() => setBlooms(prev => prev.slice(1)), 1000);
+    // 获取点击位置坐标
+    let clientX = 0; let clientY = 0;
+    if ('touches' in e) { clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; } 
+    else { clientX = (e as React.MouseEvent).clientX; clientY = (e as React.MouseEvent).clientY; }
+
+    // 触发涟漪效果（向外发射）
+    const newRipple = { id: Math.random(), x: clientX, y: clientY };
+    setRipples(prev =>[...prev, newRipple]);
+    setTimeout(() => setRipples(prev => prev.filter(r => r.id !== newRipple.id)), 2500);
 
     setRandomSpots(prev => prev.filter(s => s.id !== spot.id));
     recordAction(); 
     
+    // 500ms后生成新光斑（保持在安全区内）
     setTimeout(() => {
       const bounds = getTopHalfBounds();
       setRandomSpots(prev =>[...prev, { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.8 }]);
