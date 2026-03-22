@@ -140,6 +140,7 @@ const CabinUI = ({
     }
 
     const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+    console.log("audioBlob type:", audioBlob.type);
     audioChunksRef.current = []; // 清空
     console.log("audioBlob created, size:", audioBlob.size);
 
