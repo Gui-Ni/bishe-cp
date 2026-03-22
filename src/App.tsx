@@ -165,7 +165,7 @@ const CabinUI = ({
     recognitionRef.current.continuous = true;
     recognitionRef.current.interimResults = true;
 
-    // 1. 防死等：15秒不说自动关闭
+    // 15秒不说自动关闭
     initialTimeout.current = setTimeout(() => {
       if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
         if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
@@ -173,25 +173,18 @@ const CabinUI = ({
       }
     }, 15000);
 
-    let hasStartedSpeaking = false; // 记录是否已经开始说话
-
-    // 核心检测：识别到声音
+    // 识别到声音：只记录文字，不做其他处理
     recognitionRef.current.onresult = (e:any) => {
-      if(initialTimeout.current) {
-        clearTimeout(initialTimeout.current); // 只要有声音，取消15秒关机
-        initialTimeout.current = null;
+      // 有声音时，清除15秒超时定时器并重新设置
+      if (initialTimeout.current) {
+        clearTimeout(initialTimeout.current);
       }
-      restartCountRef.current = 0;
-
-      // 2. 说话后开始3分钟倒计时（只启动一次）
-      if (!hasStartedSpeaking) {
-        hasStartedSpeaking = true;
-        listeningTimeout.current = setTimeout(() => {
-          if (ideaModalRef.current === 'listening') {
-            handleManualSubmit(); // 3分钟到，调用手动提交
-          }
-        }, 180000);
-      }
+      initialTimeout.current = setTimeout(() => {
+        if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
+          if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+          updateModalState('hidden');
+        }
+      }, 15000);
 
       let finalTranscript = textBufferRef.current;
       let interimTranscript = '';
@@ -215,16 +208,9 @@ const CabinUI = ({
       }
     }; 
 
-    // 断开后：如果有内容就提交，没有就保持打开状态（等待超时或用户操作）
+    // 断开后：不做任何处理，等待用户点击或超时
     recognitionRef.current.onend = () => {
-      if (ideaModalRef.current === 'listening') {
-        if (textBufferRef.current.trim()) {
-          // 有内容，提交
-          handleManualSubmit();
-        }
-        // 如果没有内容，保持打开状态，不自动关闭
-        // 等待用户说话或15秒超时
-      }
+      // 保持当前状态，让用户自己点击停止
     };
 
     try { 
