@@ -153,7 +153,6 @@ const CabinUI = ({
     isStartingRef.current = false;
 
     // 清理可能残留的定时器
-    if (initialTimeout.current) clearTimeout(initialTimeout.current);
     if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
 
     // @ts-ignore
@@ -165,27 +164,8 @@ const CabinUI = ({
     recognitionRef.current.continuous = false;
     recognitionRef.current.interimResults = true;
 
-    // 15秒不说自动关闭
-    initialTimeout.current = setTimeout(() => {
-      if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
-        if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-        updateModalState('hidden');
-      }
-    }, 15000);
-
-    // 识别到声音：只记录文字，不做其他处理
+    // 识别到声音：只记录文字
     recognitionRef.current.onresult = (e:any) => {
-      // 有声音时，清除15秒超时定时器并重新设置
-      if (initialTimeout.current) {
-        clearTimeout(initialTimeout.current);
-      }
-      initialTimeout.current = setTimeout(() => {
-        if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
-          if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-          updateModalState('hidden');
-        }
-      }, 15000);
-
       let finalTranscript = textBufferRef.current;
       let interimTranscript = '';
 
@@ -232,7 +212,6 @@ const CabinUI = ({
     updateModalState('hidden'); 
     setIdeaInput("");
     if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
-    if(initialTimeout.current) clearTimeout(initialTimeout.current);
     if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
   };
 
