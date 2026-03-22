@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
+import {
   Zap, Sparkles, Smartphone, Monitor, ChevronRight, Power, Mic, Check, Hand, Loader2, Keyboard
 } from 'lucide-react';
 
@@ -15,7 +15,7 @@ interface SessionResult { mode: string; percent: number; score: string; cards: n
 // ==========================================
 // 🔴 从环境变量读取 Minimax API Key
 // ==========================================
-const MINIMAX_API_KEY = import.meta.env.VITE_MINIMAX_API_KEY || ""; 
+const MINIMAX_API_KEY = import.meta.env.VITE_MINIMAX_API_KEY || "";
 
 const INSPIRATION_DB =[
   "在静谧的深处，光总是会找到它的出口。",
@@ -29,8 +29,8 @@ const getSafeBounds = () => {
   const w = typeof window !== 'undefined' ? window.innerWidth : 800;
   const h = typeof window !== 'undefined' ? window.innerHeight : 800;
   return {
-    xRange: w * 0.75, 
-    yRange: h * 0.4   
+    xRange: w * 0.75,
+    yRange: h * 0.4
   };
 };
 
@@ -44,24 +44,24 @@ const useBackgroundNoise = (isPlaying: boolean) => {
       audioCtx = new AudioContext();
       if (audioCtx.state === 'suspended') audioCtx.resume();
 
-      const bufferSize = audioCtx.sampleRate * 2; 
+      const bufferSize = audioCtx.sampleRate * 2;
       const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
       const data = buffer.getChannelData(0);
       let lastOut = 0;
       for (let i = 0; i < bufferSize; i++) {
         const white = Math.random() * 2 - 1;
         data[i] = (lastOut + (0.02 * white)) / 1.02;
-        lastOut = data[i]; data[i] *= 3.5; 
+        lastOut = data[i]; data[i] *= 3.5;
       }
       noiseSource = audioCtx.createBufferSource(); noiseSource.buffer = buffer; noiseSource.loop = true;
-      const filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 600; 
-      gainNode = audioCtx.createGain(); gainNode.gain.setValueAtTime(0, audioCtx.currentTime); gainNode.gain.linearRampToValueAtTime(0.2, audioCtx.currentTime + 3); 
+      const filter = audioCtx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 600;
+      gainNode = audioCtx.createGain(); gainNode.gain.setValueAtTime(0, audioCtx.currentTime); gainNode.gain.linearRampToValueAtTime(0.2, audioCtx.currentTime + 3);
       noiseSource.connect(filter); filter.connect(gainNode); gainNode.connect(audioCtx.destination); noiseSource.start();
     } catch (e) { console.error("Audio Context failed", e); }
 
     return () => {
       if (gainNode && audioCtx) {
-        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 1.5); 
+        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 1.5);
         setTimeout(() => { if (noiseSource) noiseSource.stop(); if (audioCtx.state !== 'closed') audioCtx.close(); }, 1500);
       }
     };
@@ -91,27 +91,27 @@ const SyncLogo = ({ size = 'large', className = '', isSyncing = false }: { size?
 };
 
 // ==========================================
-// 2. 交互舱 UI 
+// 2. 交互舱 UI
 // ==========================================
-const CabinUI = ({ 
+const CabinUI = ({
   cabinMode, setCabinMode, targetMode, addCard, timeElapsed, endSession, recordAction
-}: { 
-  cabinMode: CabinMode, setCabinMode: (m: CabinMode) => void, targetMode: CabinMode | null, addCard: (t: string) => void, timeElapsed: number, endSession: () => void, recordAction: () => void 
+}: {
+  cabinMode: CabinMode, setCabinMode: (m: CabinMode) => void, targetMode: CabinMode | null, addCard: (t: string) => void, timeElapsed: number, endSession: () => void, recordAction: () => void
 }) => {
   const[isPressing, setIsPressing] = useState(false);
   const[confirmProgress, setConfirmProgress] = useState(0);
   const[pushProgress, setPushProgress] = useState(0);
   const[balls, setBalls] = useState<EnergyBall[]>([]);
   const[randomSpots, setRandomSpots] = useState<{id: number, x: number, y: number, size: number}[]>([]);
-  
+
   // 涟漪与飞溅火花层
   const[ripples, setRipples] = useState<Ripple[]>([]);
-  const[sparks, setSparks] = useState<Spark[]>([]); 
-  
+  const[sparks, setSparks] = useState<Spark[]>([]);
+
   const[ideaModal, setIdeaModal] = useState<'hidden' | 'listening' | 'processing'>('hidden');
   const [ideaInput, setIdeaInput] = useState("");
-  let recognitionRef = useRef<any>(null);
-  const textBufferRef = useRef(""); // 用 Ref 来存储累加的文本
+  let mediaRecorderRef = useRef<any>(null);
+  let audioChunksRef = useRef<any[]>([]);
   const ideaModalRef = useRef<'hidden' | 'listening' | 'processing'>('hidden');
 
   useBackgroundNoise(cabinMode === 'recharge' || cabinMode === 'inspiration');
@@ -121,83 +121,62 @@ const CabinUI = ({
     setIdeaModal(state);
   };
 
-  // 手动提交函数 (完美解决手动关闭时的状态冲突)
-  const handleManualSubmit = () => {
-    const finalIdea = textBufferRef.current.trim().replace(/，$/, '');
-    
-    // 1. 核心修复：在调用 stop 之前必须先切换状态为 processing 或 hidden
-    // 这样当 stop() 触发浏览器的 onend 事件时，就不会再错误地触发静默重启了。
-    if (finalIdea) {
-      updateModalState('processing');
+  // 手动提交函数 - 停止录音并调用语音识别
+  const handleManualSubmit = async () => {
+    updateModalState('processing');
+
+    // 停止录音
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+    }
+
+    // 等待最后数据
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // 发送到后端识别
+    if (audioChunksRef.current.length > 0) {
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      audioChunksRef.current = [];
+
+      const reader = new FileReader();
+      reader.readAsDataURL(audioBlob);
+      reader.onloadend = async () => {
+        const base64Audio = reader.result;
+        try {
+          const response = await fetch('https://minimax-proxy.onrender.com/voice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audio: base64Audio })
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.text) submitIdea(data.text);
+            else updateModalState('hidden');
+          } else {
+            updateModalState('hidden');
+          }
+        } catch (e) { updateModalState('hidden'); }
+      };
     } else {
       updateModalState('hidden');
     }
-
-    // 2. 安全地停止录音引擎
-    if (recognitionRef.current) { 
-      try { recognitionRef.current.stop(); } catch(e){} 
-    }
-
-    // 3. 提交给AI或清空
-    if (finalIdea) {
-      submitIdea(finalIdea);
-    } else {
-      setIdeaInput("");
-    }
   };
 
-  const openIdeaModal = () => {
-    updateModalState('listening'); 
+  // 开始录音 - MediaRecorder
+  const openIdeaModal = async () => {
+    updateModalState('listening');
     setIdeaInput("");
-    textBufferRef.current = "";
+    audioChunksRef.current = [];
 
-    // @ts-ignore
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) { updateModalState('hidden'); return; } 
-
-    recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.lang = 'zh-CN';
-    // 核心修复：开启连续录音，防止短时间说话结束立刻断掉
-    recognitionRef.current.continuous = true; 
-    recognitionRef.current.interimResults = true;
-
-    // 识别到声音：记录并拼接文字
-    recognitionRef.current.onresult = (e:any) => {
-      let finalTranscript = textBufferRef.current;
-      let interimTranscript = '';
-
-      for (let i = e.resultIndex; i < e.results.length; ++i) {
-        if (e.results[i].isFinal) {
-          finalTranscript += e.results[i][0].transcript + "，";
-        } else {
-          interimTranscript += e.results[i][0].transcript;
-        }
-      }
-
-      textBufferRef.current = finalTranscript;
-      setIdeaInput(finalTranscript + interimTranscript);
-    };
-
-    recognitionRef.current.onerror = (e: any) => { 
-      console.log("Speech Error: ", e.error); // 遇到没声音等报错仅仅打印，不关窗口，让用户手动掌控
-    }; 
-
-    // 核心修复：断开后无缝自动重启
-    // 如果你说话中间停顿太久（通常超过5-10秒），浏览器会强制抛出 onend 自动结束
-    // 只要你没点过“提交”按钮（意味着状态依旧是 listening），我们就让它悄悄继续启动监听！
-    recognitionRef.current.onend = () => {
-      if (ideaModalRef.current === 'listening') {
-        try {
-          recognitionRef.current.start();
-        } catch(e) {}
-      }
-    };
-
-    try { 
-      recognitionRef.current.start(); 
-    } catch(e){ 
-      console.error('Recognition start failed:', e);
-      updateModalState('hidden'); 
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      mediaRecorderRef.current.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      mediaRecorderRef.current.start(100);
+    } catch(e) {
+      updateModalState('hidden');
     }
   };
 
@@ -206,15 +185,15 @@ const CabinUI = ({
     try {
       const response = await fetch('https://minimax-proxy.onrender.com/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          model: "abab6.5s-chat", 
-          messages:[ 
-            { 
-              role: "system", 
-              content: "你是一个文字整理助手。请把用户口语化的输入整理得通顺简洁，只修正明显的错别字和口头禅（如'啊'、'嗯'、'那个'等），保留原意。直接输出整理后的句子，不要加任何前缀、解释或诗意表达。" 
-            }, 
-            { role: "user", content: textToSubmit } 
-          ] 
+        body: JSON.stringify({
+          model: "abab6.5s-chat",
+          messages:[
+            {
+              role: "system",
+              content: "你是一个文字整理助手。请把用户口语化的输入整理得通顺简洁，只修正明显的错别字和口头禅（如'啊'、'嗯'、'那个'等），保留原意。直接输出整理后的句子，不要加任何前缀、解释或诗意表达。"
+            },
+            { role: "user", content: textToSubmit }
+          ]
         })
       });
       if (!response.ok) throw new Error('API Failed');
@@ -222,9 +201,9 @@ const CabinUI = ({
       addCard(data.choices[0].message.content);
     } catch (error) {
       addCard(textToSubmit); // 失败兜底保存原话
-    } finally { 
+    } finally {
       updateModalState('hidden');
-      setIdeaInput(""); 
+      setIdeaInput("");
     }
   };
 
@@ -256,11 +235,11 @@ const CabinUI = ({
   useEffect(() => {
     if (cabinMode === 'recharge') {
       const bounds = getTopHalfBounds();
-      const generateNewBalls = () => [...Array(5)].map((_, i) => ({ 
-        id: Math.random(), isConsumed: false, 
-        x: (Math.random() - 0.5) * bounds.xRange, 
-        y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), 
-        size: 0.6 + Math.random() * 0.6 
+      const generateNewBalls = () => [...Array(5)].map((_, i) => ({
+        id: Math.random(), isConsumed: false,
+        x: (Math.random() - 0.5) * bounds.xRange,
+        y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin),
+        size: 0.6 + Math.random() * 0.6
       }));
       if (balls.length === 0) setBalls(generateNewBalls());
       else if (balls.every(b => b.isConsumed)) setTimeout(() => setBalls(generateNewBalls()), 800);
@@ -271,13 +250,13 @@ const CabinUI = ({
     if (cabinMode === 'inspiration') {
       const bounds = getTopHalfBounds();
       const generateSpots = () => setRandomSpots([
-        { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.8 }, 
+        { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.8 },
         { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.8 }
       ]);
       generateSpots();
       const spotInterval = setInterval(() => {
         setRandomSpots(prev => {
-          if (prev.length > 3) return prev; 
+          if (prev.length > 3) return prev;
           return[...prev, { id: Math.random(), x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.5 + Math.random() * 1.0 }];
         });
       }, 3000);
@@ -288,9 +267,9 @@ const CabinUI = ({
   // 【修复】：向外发射跳跃的反馈
   const handleSpotClick = (e: React.MouseEvent | React.TouchEvent, spot: {id: number, x: number, y: number, size: number}) => {
     if (cabinMode !== 'inspiration') return;
-    
+
     let clientX = 0; let clientY = 0;
-    if ('touches' in e) { clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; } 
+    if ('touches' in e) { clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; }
     else { clientX = (e as React.MouseEvent).clientX; clientY = (e as React.MouseEvent).clientY; }
 
     // 1. 产生大涟漪
@@ -318,8 +297,8 @@ const CabinUI = ({
 
     // 移除被点击的球并计分
     setRandomSpots(prev => prev.filter(s => s.id !== spot.id));
-    recordAction(); 
-    
+    recordAction();
+
     // 在安全区重新生成
     setTimeout(() => {
       const bounds = getTopHalfBounds();
@@ -329,7 +308,7 @@ const CabinUI = ({
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative h-[100dvh] flex flex-col items-center justify-center overflow-hidden w-full touch-none"
-      onPointerDown={() => { if(cabinMode === 'pose-confirm') setIsPressing(true); }} 
+      onPointerDown={() => { if(cabinMode === 'pose-confirm') setIsPressing(true); }}
       onPointerUp={() => setIsPressing(false)} onPointerLeave={() => setIsPressing(false)}
     >
       <div className="absolute inset-0 bg-[#4FACFE]/5 pointer-events-none" />
@@ -381,9 +360,9 @@ const CabinUI = ({
                   onDragEnd={(_, info) => {
                     const centerX = window.innerWidth / 2; const centerY = window.innerHeight / 2;
                     const dist = Math.sqrt(Math.pow(info.point.x - centerX, 2) + Math.pow(info.point.y - centerY, 2));
-                    if (dist < 100) { 
-                      setBalls(prev => prev.map(b => b.id === ball.id ? { ...b, isConsumed: true } : b)); 
-                      setPushProgress(100); recordAction(); 
+                    if (dist < 100) {
+                      setBalls(prev => prev.map(b => b.id === ball.id ? { ...b, isConsumed: true } : b));
+                      setPushProgress(100); recordAction();
                     }
                   }}
                   initial={{ scale: 0, opacity: 0, x: ball.x, y: ball.y }} animate={{ scale: ball.isConsumed ? 0 : ball.size, opacity: ball.isConsumed ? 0 : 1 }} transition={{ duration: ball.isConsumed ? 0.3 : 0.8, ease: ball.isConsumed ? "backIn" : "easeOut" }}
@@ -442,7 +421,7 @@ const CabinUI = ({
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md px-4">
             <div className="w-full max-w-lg bg-[#1A1A1A] border border-white/10 rounded-[32px] p-8 flex flex-col shadow-2xl relative overflow-hidden">
               <div className="absolute top-0 right-0 w-48 h-48 bg-[#4FACFE]/10 blur-3xl -mr-24 -mt-24 pointer-events-none" />
-              
+
               <div className="flex justify-between items-center mb-8 relative z-10">
                 <h3 className="text-xl font-light tracking-[0.2em] text-white">灵感记录</h3>
                 <button onClick={handleManualSubmit} className="text-white/40 hover:text-white transition-colors">取消/关闭</button>
@@ -451,14 +430,14 @@ const CabinUI = ({
               {ideaModal === 'listening' && (
                 <div className="flex flex-col items-center justify-center py-12 relative z-10">
                   {/* 麦克风改成可点击按钮 */}
-                  <div 
+                  <div
                     className="relative flex items-center justify-center mb-6 cursor-pointer group"
                     onPointerDown={(e) => { e.stopPropagation(); handleManualSubmit(); }}
                   >
                     <motion.div animate={{ scale:[1, 1.8, 1], opacity:[0.2, 0.6, 0.2] }} transition={{ duration: 1.5, repeat: Infinity }} className="absolute w-32 h-32 bg-[#4FACFE] rounded-full blur-[40px]" />
                     <Mic size={40} className="text-[#4FACFE] relative z-10 group-active:scale-90 transition-transform" />
                   </div>
-                  
+
                   <p className="text-white/80 tracking-widest text-sm mb-2">正在录音...</p>
                   <p className="text-white/40 text-xs mb-6">不限时长，说完请点击下方按钮停止并提交</p>
                   <button onClick={handleManualSubmit} className="flex items-center gap-2 px-6 py-2 rounded-full bg-[#4FACFE]/20 border border-[#4FACFE]/30 text-[#4FACFE] text-xs tracking-widest hover:bg-[#4FACFE]/30 transition-all">
@@ -484,7 +463,7 @@ const CabinUI = ({
         >
           <Mic size={16} className="text-[#4FACFE]" />
           <span className="text-xs text-white/70 tracking-widest hidden md:inline">点击记录灵感</span>
-          {/* 将原本移动端隐藏的“记录”改为了“灵感记录” */}
+          {/* 将原本移动端隐藏的"记录"改为了"灵感记录" */}
           <span className="text-xs text-white/70 tracking-widest md:hidden">灵感记录</span>
         </button>
       )}
@@ -495,9 +474,9 @@ const CabinUI = ({
 // ==========================================
 // 3. 手机端 UI
 // ==========================================
-const MobileUI = ({ 
+const MobileUI = ({
   mobileState, setMobileState, enterCabin, cabinMode, targetMode, sessionResult, endSession, generatedCards
-}: { 
+}: {
   mobileState: MobileState, setMobileState: (s: MobileState) => void, enterCabin: (m: CabinMode) => void, cabinMode: CabinMode, targetMode: CabinMode | null, sessionResult: SessionResult | null, endSession: () => void, generatedCards: string[]
 }) => {
   return (
@@ -510,7 +489,7 @@ const MobileUI = ({
             <h1 className="text-4xl md:text-5xl font-bold tracking-[0.3em] sync-text-gradient mb-2" style={{ paddingLeft: '0.3em' }}>心跃</h1>
             <h2 className="text-2xl md:text-3xl font-bold tracking-[0.4em] sync-text-gradient opacity-90" style={{ paddingLeft: '0.4em' }}>SYNC</h2>
           </motion.div>
-          <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.8 }} onPointerDown={() => setMobileState('modeSelect')} 
+          <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.8 }} onPointerDown={() => setMobileState('modeSelect')}
             className="px-12 py-4 rounded-full border border-white/10 bg-white/5 backdrop-blur-xl text-white font-light tracking-[0.4em] hover:bg-white/10 transition-all active:scale-95" style={{ paddingLeft: 'calc(3rem + 0.4em)' }}>进入系统</motion.button>
         </motion.div>
       )}
@@ -590,11 +569,11 @@ export default function App() {
   const[targetMode, setTargetMode] = useState<CabinMode | null>(null);
   const [mobileState, setMobileState] = useState<MobileState>('home');
   const [isTransitioning, setIsTransitioning] = useState(false);
-  
+
   const [timeElapsed, setTimeElapsed] = useState(0);
   const[generatedCards, setGeneratedCards] = useState<string[]>([]);
   const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
-  
+
   const [actionCount, setActionCount] = useState(0);
 
   useEffect(() => {
