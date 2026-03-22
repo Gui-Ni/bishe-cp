@@ -138,8 +138,8 @@ const CabinUI = ({
       return;
     }
 
-    // 尝试用 WAV 格式（阿里云更支持）
-    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+    // 阿里云现在应该支持了
+    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
     console.log("audioBlob type:", audioBlob.type);
     audioChunksRef.current = []; // 清空
     console.log("audioBlob created, size:", audioBlob.size);
