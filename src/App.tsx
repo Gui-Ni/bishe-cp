@@ -121,10 +121,9 @@ const CabinUI = ({
     setIdeaModal(state);
   };
 
-  // 手动提交函数 - 停止录音并调用语音识别
+  // 手动提交函数 - 录完就关闭，后台处理
   const handleManualSubmit = async () => {
     console.log("handleManualSubmit start");
-    updateModalState('processing');
 
     // 停止录音并等待数据写入
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
@@ -139,10 +138,15 @@ const CabinUI = ({
       return;
     }
 
-    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+    // 尝试用 WAV 格式（阿里云更支持）
+    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
     console.log("audioBlob type:", audioBlob.type);
     audioChunksRef.current = []; // 清空
     console.log("audioBlob created, size:", audioBlob.size);
+
+    // 🔥 立即关闭弹窗，让用户在后台等待
+    updateModalState('hidden');
+    setIdeaInput("");
 
     // 转换为 base64
     const base64Audio = await new Promise<string>((resolve) => {
@@ -172,9 +176,6 @@ const CabinUI = ({
 
     } catch (e) {
       console.error("处理失败:", e);
-    } finally {
-      // 只有在 submitIdea 完成或失败后，才关闭弹窗
-      updateModalState('hidden');
     }
   };
 
