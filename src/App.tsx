@@ -123,50 +123,56 @@ const CabinUI = ({
 
   // 手动提交函数 - 停止录音并调用语音识别
   const handleManualSubmit = async () => {
+    console.log("handleManualSubmit start");
     updateModalState('processing');
 
-    // 停止录音
+    // 停止录音并等待数据写入
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
+      await new Promise(resolve => setTimeout(resolve, 500)); 
     }
 
-    // 等待最后数据收集
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // 检查是否有数据
+    if (audioChunksRef.current.length === 0) {
+      console.error("没有录音数据");
+      updateModalState('hidden');
+      return;
+    }
 
-    // 发送到后端识别
-    if (audioChunksRef.current.length > 0) {
-      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-      audioChunksRef.current = [];
+    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+    audioChunksRef.current = []; // 清空
+    console.log("audioBlob created, size:", audioBlob.size);
 
-      // 转换为 base64
-      const base64Audio = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.readAsDataURL(audioBlob);
+    // 转换为 base64
+    const base64Audio = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.readAsDataURL(audioBlob);
+    });
+
+    try {
+      // 调用语音识别接口
+      console.log("calling voice API...");
+      const voiceRes = await fetch('https://minimax-proxy.onrender.com/voice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: base64Audio })
       });
 
-      try {
-        const response = await fetch('https://minimax-proxy.onrender.com/voice', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ audio: base64Audio })
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          if (data.text) {
-            submitIdea(data.text);
-          } else {
-            updateModalState('hidden');
-          }
-        } else {
-          updateModalState('hidden');
-        }
-      } catch (e) { 
-        console.error(e);
-        updateModalState('hidden'); 
-      }
-    } else {
+      const voiceData = await voiceRes.json();
+      console.log("voice response:", voiceData);
+      
+      if (!voiceData.text) throw new Error("语音识别为空");
+
+      // 调用 AI 整理文本
+      console.log("calling AI to organize:", voiceData.text);
+      await submitIdea(voiceData.text); 
+      console.log("submitIdea done");
+
+    } catch (e) {
+      console.error("处理失败:", e);
+    } finally {
+      // 只有在 submitIdea 完成或失败后，才关闭弹窗
       updateModalState('hidden');
     }
   };
@@ -191,6 +197,7 @@ const CabinUI = ({
 
   // 通过代理调用 AI（支持传入指定文本）
   const submitIdea = async (textToSubmit: string) => {
+    console.log("submitIdea called with:", textToSubmit);
     try {
       const response = await fetch('https://minimax-proxy.onrender.com/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -205,12 +212,17 @@ const CabinUI = ({
           ]
         })
       });
+      console.log("chat API response:", response.ok);
       if (!response.ok) throw new Error('API Failed');
       const data = await response.json();
+      console.log("chat data:", data);
       addCard(data.choices[0].message.content);
+      console.log("addCard called");
     } catch (error) {
+      console.error("submitIdea error:", error);
       addCard(textToSubmit); // 失败兜底保存原话
     } finally {
+      console.log("submitIdea finally");
       updateModalState('hidden');
       setIdeaInput("");
     }
