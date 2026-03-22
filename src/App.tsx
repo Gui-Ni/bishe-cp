@@ -127,12 +127,34 @@ const CabinUI = ({
     setIdeaModal(state);
   };
 
+  // 手动提交函数
+  const handleManualSubmit = () => {
+    if (recognitionRef.current) { 
+      try { recognitionRef.current.stop(); } catch(e){} 
+    }
+    // 清除所有定时器
+    if (initialTimeout.current) clearTimeout(initialTimeout.current);
+    if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
+
+    const finalIdea = textBufferRef.current.trim().replace(/，$/, '');
+    if (finalIdea) {
+      updateModalState('processing');
+      submitIdea(finalIdea);
+    } else {
+      updateModalState('hidden');
+    }
+  };
+
   const openIdeaModal = () => {
     updateModalState('listening'); 
     setIdeaInput("");
     textBufferRef.current = "";
-    restartCountRef.current = 0; // 每次打开清空重试次数
+    restartCountRef.current = 0;
     isStartingRef.current = false;
+
+    // 清理可能残留的定时器
+    if (initialTimeout.current) clearTimeout(initialTimeout.current);
+    if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
 
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -141,10 +163,9 @@ const CabinUI = ({
     recognitionRef.current = new SpeechRecognition();
     recognitionRef.current.lang = 'zh-CN';
     recognitionRef.current.continuous = true;
-    recognitionRef.current.interimResults = true; // 开启实时返回结果
+    recognitionRef.current.interimResults = true;
 
     // 1. 防死等：15秒不说自动关闭
-    if(initialTimeout.current) clearTimeout(initialTimeout.current);
     initialTimeout.current = setTimeout(() => {
       if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
         if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
@@ -152,27 +173,29 @@ const CabinUI = ({
       }
     }, 15000);
 
-    // 2. 固定录音时长：3分钟
-    if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
-    listeningTimeout.current = setTimeout(() => {
-      if (ideaModalRef.current === 'listening') {
-        if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-        submitIdea(textBufferRef.current.replace(/，$/, ''));
-      }
-    }, 180000); // 3分钟 = 180000ms
+    let hasStartedSpeaking = false; // 记录是否已经开始说话
 
-    // 核心检测回调
+    // 核心检测：识别到声音
     recognitionRef.current.onresult = (e:any) => {
-      // 只要有人声，清除15秒关闭倒计时
-      if(initialTimeout.current) clearTimeout(initialTimeout.current);
-      
-      // 重置连续失败次数
+      if(initialTimeout.current) {
+        clearTimeout(initialTimeout.current); // 只要有声音，取消15秒关机
+        initialTimeout.current = null;
+      }
       restartCountRef.current = 0;
+
+      // 2. 说话后开始3分钟倒计时（只启动一次）
+      if (!hasStartedSpeaking) {
+        hasStartedSpeaking = true;
+        listeningTimeout.current = setTimeout(() => {
+          if (ideaModalRef.current === 'listening') {
+            handleManualSubmit(); // 3分钟到，调用手动提交
+          }
+        }, 180000);
+      }
 
       let finalTranscript = textBufferRef.current;
       let interimTranscript = '';
 
-      // 遍历所有结果
       for (let i = e.resultIndex; i < e.results.length; ++i) {
         if (e.results[i].isFinal) {
           finalTranscript += e.results[i][0].transcript + "，";
@@ -502,10 +525,17 @@ const CabinUI = ({
 
               {ideaModal === 'listening' && (
                 <div className="flex flex-col items-center justify-center py-12 relative z-10">
-                  <motion.div animate={{ scale:[1, 1.5, 1], opacity:[0.2, 0.6, 0.2] }} transition={{ duration: 1.5, repeat: Infinity }} className="absolute w-32 h-32 bg-[#4FACFE] rounded-full blur-[40px]" />
-                  <Mic size={40} className="text-[#4FACFE] mb-6 relative z-10" />
-                  <p className="text-white/80 tracking-widest text-sm mb-4">正在录音...</p>
-                  <p className="text-white/40 text-xs mb-8">最长3分钟</p>
+                  {/* 麦克风改成可点击按钮 */}
+                  <div 
+                    className="relative flex items-center justify-center mb-6 cursor-pointer group"
+                    onPointerDown={(e) => { e.stopPropagation(); handleManualSubmit(); }}
+                  >
+                    <motion.div animate={{ scale:[1, 1.8, 1], opacity:[0.2, 0.6, 0.2] }} transition={{ duration: 1.5, repeat: Infinity }} className="absolute w-32 h-32 bg-[#4FACFE] rounded-full blur-[40px]" />
+                    <Mic size={40} className="text-[#4FACFE] relative z-10 group-active:scale-90 transition-transform" />
+                  </div>
+                  
+                  <p className="text-white/80 tracking-widest text-sm mb-2">正在录音...</p>
+                  <p className="text-white/40 text-xs mb-6">最长3分钟，说完点击麦克风停止</p>
                   <button onClick={() => {
                     if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
                     if (textBufferRef.current.trim()) {
