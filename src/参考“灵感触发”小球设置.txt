@@ -8,7 +8,8 @@ type CabinMode = 'idle' | 'pose-confirm' | 'recharge' | 'inspiration' | 'ending'
 type MobileState = 'home' | 'modeSelect' | 'activeInCabin' | 'result' | 'cardsView';
 
 interface Ripple { id: number; x: number; y: number; }
-interface Spark { id: number; x: number; y: number; } // 重新引入火花粒子
+// 新增：发射火花的接口，带起始和终点坐标
+interface Spark { id: number; startX: number; startY: number; endX: number; endY: number; }
 interface EnergyBall { id: number; isConsumed: boolean; x: number; y: number; size: number; }
 interface SessionResult { mode: string; percent: number; score: string; cards: number; }
 
@@ -24,14 +25,10 @@ const INSPIRATION_DB =[
   "打破原有的边界，让神经元以意想不到的方式连接。"
 ];
 
-// 获取安全的屏幕生成范围
 const getSafeBounds = () => {
   const w = typeof window !== 'undefined' ? window.innerWidth : 800;
   const h = typeof window !== 'undefined' ? window.innerHeight : 800;
-  return {
-    xRange: w * 0.75, 
-    yRange: h * 0.4   
-  };
+  return { xRange: w * 0.75, yRange: h * 0.4 };
 };
 
 const useBackgroundNoise = (isPlaying: boolean) => {
@@ -43,7 +40,6 @@ const useBackgroundNoise = (isPlaying: boolean) => {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       audioCtx = new AudioContext();
       if (audioCtx.state === 'suspended') audioCtx.resume();
-
       const bufferSize = audioCtx.sampleRate * 2; 
       const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
       const data = buffer.getChannelData(0);
@@ -58,7 +54,6 @@ const useBackgroundNoise = (isPlaying: boolean) => {
       gainNode = audioCtx.createGain(); gainNode.gain.setValueAtTime(0, audioCtx.currentTime); gainNode.gain.linearRampToValueAtTime(0.2, audioCtx.currentTime + 3); 
       noiseSource.connect(filter); filter.connect(gainNode); gainNode.connect(audioCtx.destination); noiseSource.start();
     } catch (e) { console.error("Audio Context failed", e); }
-
     return () => {
       if (gainNode && audioCtx) {
         gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 1.5); 
@@ -143,7 +138,7 @@ const CabinUI = ({
     if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
   };
 
-  // 【修复】：彻底修改 AI System Prompt，只保留原话，仅作错别字修正
+  // AI 保留原话，只修错字
   const submitIdea = async () => {
     if (!ideaInput.trim()) return;
     setIdeaModal('processing');
@@ -155,7 +150,7 @@ const CabinUI = ({
           messages:[ 
             { 
               role: "system", 
-              content: "你是一个文字整理助手。请仅仅修复用户输入文本中的错别字，并去掉'啊'、'呃'、'那个'等无意义的语气词，使句子通顺。必须完全保留用户的原意和第一人称语气，绝对不要去总结它，不要擅自加上任何解释、前缀或套话。直接输出修正后的原话。" 
+              content: "你是一个语音错字纠正助手。请仅仅修复用户输入文本中的错别字，并去掉'啊'、'呃'、'那个'等无意义的语气词，使句子通顺。必须完全保留用户的原意和第一人称语气，绝对不要去总结它，不要擅自加上任何解释、前缀或套话。直接输出修正后的原话。" 
             }, 
             { role: "user", content: ideaInput } 
           ] 
@@ -199,9 +194,7 @@ const CabinUI = ({
       const bounds = getTopHalfBounds();
       const generateNewBalls = () => [...Array(5)].map((_, i) => ({ 
         id: Math.random(), isConsumed: false, 
-        x: (Math.random() - 0.5) * bounds.xRange, 
-        y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), 
-        size: 0.6 + Math.random() * 0.6 
+        x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.6 
       }));
       if (balls.length === 0) setBalls(generateNewBalls());
       else if (balls.every(b => b.isConsumed)) setTimeout(() => setBalls(generateNewBalls()), 800);
@@ -226,7 +219,7 @@ const CabinUI = ({
     }
   }, [cabinMode]);
 
-  // 【修复】：向外发射跳跃的反馈
+  // 【核心修复】：点击灵感球 -> 产生涟漪 + 发射爆炸粒子
   const handleSpotClick = (e: React.MouseEvent | React.TouchEvent, spot: {id: number, x: number, y: number, size: number}) => {
     if (cabinMode !== 'inspiration') return;
     
@@ -234,18 +227,29 @@ const CabinUI = ({
     if ('touches' in e) { clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; } 
     else { clientX = (e as React.MouseEvent).clientX; clientY = (e as React.MouseEvent).clientY; }
 
-    // 1. 产生大涟漪
+    // 1. 产生大涟漪 Ripple
     const newRippleId = Math.random();
     setRipples(prev =>[...prev, { id: newRippleId, x: clientX, y: clientY }]);
     setTimeout(() => setRipples(prev => prev.filter(r => r.id !== newRippleId)), 2500);
 
-    // 2. 产生向外发射的火花飞溅效果 (Sparks)
-    const newSparks = [...Array(6)].map(() => ({ id: Math.random(), x: clientX, y: clientY }));
-    setSparks(prev => [...prev, ...newSparks]);
+    // 2. 生成向外发射的火花 (Sparks)
+    const particleCount = 12; // 12颗粒子呈放射状炸开
+    const newSparks: Spark[] =[...Array(particleCount)].map(() => {
+      const angle = Math.random() * Math.PI * 2; // 随机角度
+      const velocity = 150 + Math.random() * 150; // 随机弹射距离
+      return {
+        id: Math.random(),
+        startX: clientX, startY: clientY,
+        endX: clientX + Math.cos(angle) * velocity,
+        endY: clientY + Math.sin(angle) * velocity
+      };
+    });
+    
+    setSparks(prev =>[...prev, ...newSparks]);
     setTimeout(() => {
       const sparkIds = newSparks.map(s => s.id);
       setSparks(prev => prev.filter(s => !sparkIds.includes(s.id)));
-    }, 1000);
+    }, 800); // 0.8秒后火花消失
 
     // 移除被点击的球并计分
     setRandomSpots(prev => prev.filter(s => s.id !== spot.id));
@@ -333,7 +337,7 @@ const CabinUI = ({
             {randomSpots.map(spot => (
               <motion.div key={spot.id} initial={{ opacity: 0, scale: 0, x: spot.x, y: spot.y }} animate={{ opacity: 1, scale: spot.size, x: spot.x, y: spot.y }} exit={{ opacity: 0, scale: 0 }} transition={{ duration: 0.4, ease: "easeOut" }}
                 className="absolute flex items-start justify-center pointer-events-none">
-                <div className="w-16 h-16 rounded-full border border-white/30 bg-white/10 backdrop-blur-md flex items-center justify-center cursor-pointer pointer-events-auto hover:bg-white/30 hover:shadow-[0_0_20px_rgba(255,255,255,0.4)] transition-all shadow-[0_0_15px_rgba(255,255,255,0.1)] touch-none"
+                <div className="w-16 h-16 -mt-8 rounded-full border border-white/30 bg-white/10 backdrop-blur-md flex items-center justify-center cursor-pointer pointer-events-auto hover:bg-white/30 hover:shadow-[0_0_20px_rgba(255,255,255,0.4)] transition-all shadow-[0_0_15px_rgba(255,255,255,0.1)] touch-none"
                   onPointerDown={(e) => handleSpotClick(e, spot)}>
                   <motion.div animate={{ scale:[1, 1.5, 1], opacity:[0.8, 0, 0.8] }} transition={{ duration: 1.5 + spot.size, repeat: Infinity }} className="absolute w-4 h-4 bg-white rounded-full blur-[2px]" />
                 </div>
@@ -343,25 +347,21 @@ const CabinUI = ({
         )}
       </div>
 
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-         <SyncLogo className="mb-24 scale-[0.6] md:scale-[0.8]" isSyncing={pushProgress > 20 || cabinMode === 'inspiration'} />
-      </div>
-
-      {/* 【修复】：把涟漪和向外发射的火花渲染在这里 */}
+      {/* ================= 发射特效层 ================= */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
         {ripples.map(ripple => <div key={ripple.id} className="ripple" style={{ left: ripple.x, top: ripple.y }} />)}
         {sparks.map(spark => (
           <motion.div key={spark.id}
-            initial={{ scale: 0, opacity: 1, x: spark.x, y: spark.y }}
-            animate={{
-              scale: [0, 1.5, 0], opacity: [1, 1, 0],
-              x: spark.x + (Math.random() - 0.5) * 200, 
-              y: spark.y + (Math.random() - 0.5) * 200  // 向四周随机飞溅
-            }}
+            initial={{ scale: 1, opacity: 1, x: spark.startX, y: spark.startY }}
+            animate={{ scale: 0, opacity: 0, x: spark.endX, y: spark.endY }}
             transition={{ duration: 0.6, ease: "easeOut" }}
             className="absolute w-3 h-3 bg-white rounded-full blur-[1px] shadow-[0_0_15px_#4FACFE]"
           />
         ))}
+      </div>
+
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+         <SyncLogo className="mb-24 scale-[0.6] md:scale-[0.8]" isSyncing={pushProgress > 20 || cabinMode === 'inspiration'} />
       </div>
 
       <AnimatePresence>
@@ -372,23 +372,26 @@ const CabinUI = ({
         )}
       </AnimatePresence>
 
+      {/* 🔴 完美还原图1的灵感录入 Modal */}
       <AnimatePresence>
         {ideaModal !== 'hidden' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md px-4">
-            <div className="w-full max-w-lg bg-[#1A1A1A] border border-white/10 rounded-[32px] p-8 flex flex-col shadow-2xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-48 h-48 bg-[#4FACFE]/10 blur-3xl -mr-24 -mt-24 pointer-events-none" />
+            <div className="w-full max-w-lg bg-[#111111] border border-white/5 rounded-[32px] p-8 flex flex-col shadow-2xl relative overflow-hidden">
               
-              <div className="flex justify-between items-center mb-8 relative z-10">
-                <h3 className="text-xl font-light tracking-[0.2em] text-white">灵感记录</h3>
-                <button onClick={closeIdeaModal} className="text-white/40 hover:text-white transition-colors">取消</button>
+              <div className="flex justify-between items-center mb-12 relative z-10">
+                <h3 className="text-lg font-light tracking-[0.2em] text-white/90">灵感记录</h3>
+                <button onClick={closeIdeaModal} className="text-white/30 hover:text-white/80 transition-colors text-sm tracking-widest">取消</button>
               </div>
 
               {ideaModal === 'listening' && (
-                <div className="flex flex-col items-center justify-center py-12 relative z-10">
-                  <motion.div animate={{ scale:[1, 1.5, 1], opacity:[0.2, 0.6, 0.2] }} transition={{ duration: 1.5, repeat: Infinity }} className="absolute w-32 h-32 bg-[#4FACFE] rounded-full blur-[40px]" />
-                  <Mic size={40} className="text-[#4FACFE] mb-6 relative z-10" />
-                  <p className="text-white/80 tracking-widest text-sm mb-8">请说出你的灵感...</p>
-                  <button onClick={() => setIdeaModal('typing')} className="flex items-center gap-2 px-6 py-2 rounded-full bg-white/5 border border-white/10 text-white/60 text-xs tracking-widest hover:bg-white/10 transition-all">
+                <div className="flex flex-col items-center justify-center py-8 relative z-10">
+                  <div className="relative flex items-center justify-center mb-8">
+                    <motion.div animate={{ scale:[1, 1.8, 1], opacity:[0.1, 0.4, 0.1] }} transition={{ duration: 2, repeat: Infinity }} className="absolute w-24 h-24 bg-[#4FACFE] rounded-full blur-[30px]" />
+                    <Mic size={36} className="text-[#4FACFE] relative z-10 drop-shadow-[0_0_10px_rgba(79,172,254,0.8)]" />
+                  </div>
+                  <p className="text-white/60 tracking-widest text-sm mb-12">请说出你的灵感...</p>
+                  
+                  <button onClick={() => setIdeaModal('typing')} className="flex items-center gap-2 px-6 py-2.5 rounded-full bg-white/5 border border-white/10 text-white/50 text-xs tracking-widest hover:bg-white/10 transition-all hover:text-white/80">
                     <Keyboard size={14} /> 切换为键盘输入
                   </button>
                 </div>
@@ -398,7 +401,7 @@ const CabinUI = ({
                 <div className="flex flex-col w-full relative z-10">
                   <textarea autoFocus value={ideaInput} onChange={(e) => setIdeaInput(e.target.value)} placeholder="在这里输入你的碎片灵感..." className="w-full h-32 bg-white/5 border border-white/10 rounded-2xl p-4 text-white/90 placeholder-white/30 focus:outline-none focus:border-[#4FACFE]/50 transition-colors resize-none mb-6" />
                   <button onClick={submitIdea} disabled={!ideaInput.trim()} className="w-full py-4 rounded-xl bg-[#4FACFE]/20 text-[#4FACFE] tracking-widest font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#4FACFE]/30 transition-all">
-                    存入卡片
+                    保存灵感
                   </button>
                 </div>
               )}
@@ -406,7 +409,7 @@ const CabinUI = ({
               {ideaModal === 'processing' && (
                 <div className="flex flex-col items-center justify-center py-16 relative z-10">
                   <Loader2 size={40} className="text-[#4FACFE] animate-spin mb-6" />
-                  <p className="text-[#4FACFE] tracking-widest text-sm">AI 正在处理文字...</p>
+                  <p className="text-[#4FACFE] tracking-widest text-sm">正在封存卡片...</p>
                 </div>
               )}
             </div>
@@ -522,15 +525,15 @@ const MobileUI = ({
 export default function App() {
   const[view, setView] = useState<'cabin' | 'mobile'>('mobile');
   const[cabinMode, setCabinMode] = useState<CabinMode>('idle');
-  const [targetMode, setTargetMode] = useState<CabinMode | null>(null);
-  const [mobileState, setMobileState] = useState<MobileState>('home');
+  const[targetMode, setTargetMode] = useState<CabinMode | null>(null);
+  const[mobileState, setMobileState] = useState<MobileState>('home');
   const [isTransitioning, setIsTransitioning] = useState(false);
   
   const [timeElapsed, setTimeElapsed] = useState(0);
-  const[generatedCards, setGeneratedCards] = useState<string[]>([]);
-  const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
+  const [generatedCards, setGeneratedCards] = useState<string[]>([]);
+  const[sessionResult, setSessionResult] = useState<SessionResult | null>(null);
   
-  const [actionCount, setActionCount] = useState(0);
+  const[actionCount, setActionCount] = useState(0);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -573,9 +576,9 @@ export default function App() {
 
       <AnimatePresence mode="wait">
         {view === 'cabin' ? (
-          <CabinUI cabinMode={cabinMode} setCabinMode={setCabinMode} targetMode={targetMode} addCard={(t) => setGeneratedCards(p =>[...p, t])} timeElapsed={timeElapsed} endSession={endSession} recordAction={() => setActionCount(p => p + 1)} />
+          <CabinUI key="cabin" cabinMode={cabinMode} setCabinMode={setCabinMode} targetMode={targetMode} addCard={(t) => setGeneratedCards(p =>[...p, t])} timeElapsed={timeElapsed} endSession={endSession} recordAction={() => setActionCount(p => p + 1)} />
         ) : (
-          <MobileUI mobileState={mobileState} setMobileState={setMobileState} enterCabin={enterCabin} cabinMode={cabinMode} targetMode={targetMode} sessionResult={sessionResult} endSession={endSession} generatedCards={generatedCards} />
+          <MobileUI key="mobile" mobileState={mobileState} setMobileState={setMobileState} enterCabin={enterCabin} cabinMode={cabinMode} targetMode={targetMode} sessionResult={sessionResult} endSession={endSession} generatedCards={generatedCards} />
         )}
       </AnimatePresence>
 
