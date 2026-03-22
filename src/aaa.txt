@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Zap, Sparkles, Smartphone, Monitor, ChevronRight, Power, Mic, Check, Hand, Loader2, Keyboard
+  Zap, Sparkles, Smartphone, Monitor, ChevronRight, Power, Mic, Check, Hand, Loader2
 } from 'lucide-react';
 
 type CabinMode = 'idle' | 'pose-confirm' | 'recharge' | 'inspiration' | 'ending';
@@ -15,7 +15,7 @@ interface SessionResult { mode: string; percent: number; score: string; cards: n
 // ==========================================
 // 🔴 从环境变量读取 Minimax API Key
 // ==========================================
-const MINIMAX_API_KEY = import.meta.env.VITE_MINIMAX_API_KEY || "请在这里填入你的_MINIMAX_API_KEY"; 
+const MINIMAX_API_KEY = import.meta.env.VITE_MINIMAX_API_KEY || ""; 
 
 const INSPIRATION_DB =[
   "在静谧的深处，光总是会找到它的出口。",
@@ -24,10 +24,14 @@ const INSPIRATION_DB =[
   "打破原有的边界，让神经元以意想不到的方式连接。"
 ];
 
+// 获取安全的屏幕生成范围
 const getSafeBounds = () => {
   const w = typeof window !== 'undefined' ? window.innerWidth : 800;
   const h = typeof window !== 'undefined' ? window.innerHeight : 800;
-  return { xRange: w * 0.75, yRange: h * 0.4 };
+  return {
+    xRange: w * 0.75, 
+    yRange: h * 0.4   
+  };
 };
 
 const useBackgroundNoise = (isPlaying: boolean) => {
@@ -39,6 +43,7 @@ const useBackgroundNoise = (isPlaying: boolean) => {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       audioCtx = new AudioContext();
       if (audioCtx.state === 'suspended') audioCtx.resume();
+
       const bufferSize = audioCtx.sampleRate * 2; 
       const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
       const data = buffer.getChannelData(0);
@@ -53,6 +58,7 @@ const useBackgroundNoise = (isPlaying: boolean) => {
       gainNode = audioCtx.createGain(); gainNode.gain.setValueAtTime(0, audioCtx.currentTime); gainNode.gain.linearRampToValueAtTime(0.2, audioCtx.currentTime + 3); 
       noiseSource.connect(filter); filter.connect(gainNode); gainNode.connect(audioCtx.destination); noiseSource.start();
     } catch (e) { console.error("Audio Context failed", e); }
+
     return () => {
       if (gainNode && audioCtx) {
         gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 1.5); 
@@ -98,29 +104,158 @@ const CabinUI = ({
   const[balls, setBalls] = useState<EnergyBall[]>([]);
   const[randomSpots, setRandomSpots] = useState<{id: number, x: number, y: number, size: number}[]>([]);
   
+  // 涟漪与飞溅火花层
   const[ripples, setRipples] = useState<Ripple[]>([]);
   const[sparks, setSparks] = useState<Spark[]>([]); 
-  const rippleIdRef = useRef(0);
   
-  // 🔴 VAD 智能语音核心控制状态
-  const [ideaModal, setIdeaModal] = useState<'hidden' | 'listening' | 'typing' | 'processing'>('hidden');
-  const [ideaInput, setIdeaInput] = useState(""); // 实时显示在屏幕上的文字
-  
-  // 使用 Ref 打破闭包陷阱，记录当前面板状态、倒计时和累加文本
-  const ideaModalRef = useRef<'hidden' | 'listening' | 'typing' | 'processing'>('hidden');
+  // 🔴 彻底删除了 'typing' 状态，只保留全语音流程
+  const[ideaModal, setIdeaModal] = useState<'hidden' | 'listening' | 'processing'>('hidden');
+  const[ideaInput, setIdeaInput] = useState("");
+  let recognitionRef = useRef<any>(null);
+  let listeningTimeout = useRef<any>(null);
+  let initialTimeout = useRef<any>(null);
   const textBufferRef = useRef(""); 
-  const recognitionRef = useRef<any>(null);
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const initialTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const ideaModalRef = useRef<'hidden' | 'listening' | 'processing'>('hidden');
 
-  const updateModalState = (state: 'hidden' | 'listening' | 'typing' | 'processing') => {
+  // 安全阀
+  const restartCountRef = useRef(0); 
+  const isStartingRef = useRef(false); 
+
+  useBackgroundNoise(cabinMode === 'recharge' || cabinMode === 'inspiration');
+
+  const updateModalState = (state: 'hidden' | 'listening' | 'processing') => {
     ideaModalRef.current = state;
     setIdeaModal(state);
   };
 
-  useBackgroundNoise(cabinMode === 'recharge' || cabinMode === 'inspiration');
+  const handleManualSubmit = () => {
+    if (recognitionRef.current) { 
+      try { recognitionRef.current.stop(); } catch(e){} 
+    }
+    if (initialTimeout.current) clearTimeout(initialTimeout.current);
+    if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
 
-  // ================= AI 灵感处理逻辑 =================
+    const finalIdea = textBufferRef.current.trim().replace(/，$/, '');
+    if (finalIdea) {
+      updateModalState('processing');
+      submitIdea(finalIdea);
+    } else {
+      updateModalState('hidden');
+    }
+  };
+
+  const openIdeaModal = () => {
+    updateModalState('listening'); 
+    setIdeaInput("");
+    textBufferRef.current = "";
+    restartCountRef.current = 0;
+    isStartingRef.current = false;
+
+    if (initialTimeout.current) clearTimeout(initialTimeout.current);
+    if (listeningTimeout.current) clearTimeout(listeningTimeout.current);
+
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    // 如果不支持语音识别，直接静默关闭，不弹任何输入框
+    if (!SpeechRecognition) { updateModalState('hidden'); return; } 
+
+    recognitionRef.current = new SpeechRecognition();
+    recognitionRef.current.lang = 'zh-CN';
+    recognitionRef.current.continuous = true;
+    recognitionRef.current.interimResults = true;
+
+    // 1. 防死等：15秒不说自动关闭
+    initialTimeout.current = setTimeout(() => {
+      if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
+        if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+        updateModalState('hidden');
+      }
+    }, 15000);
+
+    let hasStartedSpeaking = false;
+
+    // 核心检测：识别到声音
+    recognitionRef.current.onresult = (e:any) => {
+      if(initialTimeout.current) {
+        clearTimeout(initialTimeout.current); 
+        initialTimeout.current = null;
+      }
+      restartCountRef.current = 0;
+
+      // 2. 说话后开始极限3分钟倒计时
+      if (!hasStartedSpeaking) {
+        hasStartedSpeaking = true;
+        listeningTimeout.current = setTimeout(() => {
+          if (ideaModalRef.current === 'listening') {
+            handleManualSubmit(); 
+          }
+        }, 180000);
+      }
+
+      let finalTranscript = textBufferRef.current;
+      let interimTranscript = '';
+
+      for (let i = e.resultIndex; i < e.results.length; ++i) {
+        if (e.results[i].isFinal) {
+          finalTranscript += e.results[i][0].transcript + "，";
+        } else {
+          interimTranscript += e.results[i][0].transcript;
+        }
+      }
+
+      textBufferRef.current = finalTranscript;
+      setIdeaInput(finalTranscript + interimTranscript);
+    };
+
+    recognitionRef.current.onerror = (e: any) => { 
+      // 🔴 遇到任何错误（网络/没声音等），只要不是彻底被禁，都静默忽略，依靠自动重启机制
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        updateModalState('hidden'); // 如果用户没给权限，直接关掉面板
+      }
+    }; 
+
+    // 极度安全的优雅重启机制
+    recognitionRef.current.onend = () => {
+      if (ideaModalRef.current === 'listening' && !isStartingRef.current) {
+        if (restartCountRef.current >= 5) {
+          updateModalState('hidden'); // 连续断开5次，彻底放弃并关闭面板，坚决不弹键盘
+          return;
+        }
+
+        restartCountRef.current += 1;
+        isStartingRef.current = true;
+
+        setTimeout(() => {
+          if (ideaModalRef.current === 'listening') {
+            try { 
+              recognitionRef.current.start(); 
+            } catch(e) {
+              console.error("重启麦克风失败:", e);
+            } finally {
+              isStartingRef.current = false;
+            }
+          }
+        }, 400);
+      }
+    };
+
+    try { 
+      isStartingRef.current = true;
+      recognitionRef.current.start(); 
+    } catch(e){ 
+      updateModalState('hidden'); 
+    } finally {
+      isStartingRef.current = false;
+    }
+  };
+
+  const closeIdeaModal = () => {
+    updateModalState('hidden'); 
+    setIdeaInput("");
+    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
+  };
+
+  // AI 保留原话，只修错字
   const submitIdea = async (textToSubmit: string) => {
     if (!textToSubmit.trim()) {
       updateModalState('hidden');
@@ -134,9 +269,8 @@ const CabinUI = ({
           model: "abab6.5s-chat", 
           messages:[ 
             { 
-              // 🔴 极度严格的 System Prompt，防止 AI 瞎总结
               role: "system", 
-              content: "你是一个文本整理器。你的任务是：仅仅修复用户输入文本中的错别字，去掉'啊'、'呃'、'那个'等无意义的语气助词。必须完全保留用户的原话原意和第一人称。绝对不允许概括、绝对不允许添加任何前缀（如'原话是'）、绝对不允许进行排版。直接输出修正后的原话本身即可。" 
+              content: "你是一个语音错字纠正助手。请仅仅修复用户输入文本中的错别字，并去掉'啊'、'呃'、'那个'等无意义的语气词，使句子通顺。必须完全保留用户的原意和第一人称语气，绝对不要去总结它，不要擅自加上任何解释、前缀或套话。直接输出修正后的原话。" 
             }, 
             { role: "user", content: textToSubmit } 
           ] 
@@ -146,94 +280,13 @@ const CabinUI = ({
       const data = await response.json();
       addCard(data.choices[0].message.content);
     } catch (error) {
-      addCard(textToSubmit); // 接口挂了，直接存原话
+      addCard(textToSubmit); 
     } finally { 
       updateModalState('hidden');
-      setIdeaInput("");
+      setIdeaInput(""); 
     }
   };
 
-  // ================= 智能 VAD 语音监听流程 =================
-  const openIdeaModal = () => {
-    updateModalState('listening'); 
-    setIdeaInput("");
-    textBufferRef.current = "";
-    
-    // @ts-ignore
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) { updateModalState('typing'); return; } 
-    
-    recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.lang = 'zh-CN';
-    recognitionRef.current.continuous = true;     // 开启持续监听
-    recognitionRef.current.interimResults = true; // 开启实时返回结果（用于快速打断计时器）
-    
-    // 防死等机制：如果打开面板后 15 秒连一个字都没说，自动关闭
-    if(initialTimerRef.current) clearTimeout(initialTimerRef.current);
-    initialTimerRef.current = setTimeout(() => {
-      if (ideaModalRef.current === 'listening' && textBufferRef.current.trim() === "") {
-        if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-        updateModalState('hidden');
-      }
-    }, 15000);
-
-    // 核心检测回调
-    recognitionRef.current.onresult = (e:any) => {
-      // 只要有人声，立刻清除初始关机倒计时
-      if(initialTimerRef.current) clearTimeout(initialTimerRef.current);
-
-      let finalTranscript = textBufferRef.current;
-      let interimTranscript = '';
-
-      // 遍历所有结果，区分已敲定的话和正在说的话
-      for (let i = e.resultIndex; i < e.results.length; ++i) {
-        if (e.results[i].isFinal) {
-          finalTranscript += e.results[i][0].transcript + "，";
-        } else {
-          interimTranscript += e.results[i][0].transcript;
-        }
-      }
-
-      textBufferRef.current = finalTranscript;
-      
-      // 更新屏幕显示的字（实时的，非常有安全感）
-      setIdeaInput(finalTranscript + interimTranscript);
-
-      // 🔴 只要侦测到人声（无论最终还是实时），立刻清除之前的 8 秒倒计时，并重新开始计时！
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = setTimeout(() => {
-        // 连续 8 秒没声音了，触发总结
-        if (ideaModalRef.current === 'listening') {
-           if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-           submitIdea(textBufferRef.current.replace(/，$/, '')); // 提交
-        }
-      }, 8000);
-    };
-
-    recognitionRef.current.onerror = (e: any) => { 
-      if (e.error !== 'no-speech') updateModalState('typing'); 
-    }; 
-    
-    recognitionRef.current.onend = () => { 
-      // 如果因为系统原因自动断开了，但我们还在录制阶段（说明没到8秒），强行把它重启！
-      if (ideaModalRef.current === 'listening') {
-        try { recognitionRef.current.start(); } catch(e){}
-      }
-    };
-    
-    try { recognitionRef.current.start(); } catch(e){ updateModalState('typing'); }
-  };
-
-  const closeIdeaModal = () => {
-    updateModalState('hidden'); 
-    setIdeaInput("");
-    if(listeningTimeout.current) clearTimeout(listeningTimeout.current);
-    if(silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-    if(initialTimerRef.current) clearTimeout(initialTimerRef.current);
-    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch(e){} }
-  };
-
-  // ================= 核心交互逻辑 =================
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (cabinMode === 'pose-confirm') {
@@ -263,7 +316,10 @@ const CabinUI = ({
     if (cabinMode === 'recharge') {
       const bounds = getTopHalfBounds();
       const generateNewBalls = () => [...Array(5)].map((_, i) => ({ 
-        id: Math.random(), isConsumed: false, x: (Math.random() - 0.5) * bounds.xRange, y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), size: 0.6 + Math.random() * 0.6 
+        id: Math.random(), isConsumed: false, 
+        x: (Math.random() - 0.5) * bounds.xRange, 
+        y: bounds.yMin + Math.random() * (bounds.yMax - bounds.yMin), 
+        size: 0.6 + Math.random() * 0.6 
       }));
       if (balls.length === 0) setBalls(generateNewBalls());
       else if (balls.every(b => b.isConsumed)) setTimeout(() => setBalls(generateNewBalls()), 800);
@@ -286,7 +342,7 @@ const CabinUI = ({
       }, 3000);
       return () => clearInterval(spotInterval);
     }
-  },[cabinMode]);
+  }, [cabinMode]);
 
   const handleSpotClick = (e: React.MouseEvent | React.TouchEvent, spot: {id: number, x: number, y: number, size: number}) => {
     if (cabinMode !== 'inspiration') return;
@@ -387,7 +443,7 @@ const CabinUI = ({
               )
             ))}
             <div className="absolute w-64 h-64 rounded-full bg-[#4FACFE] blur-[60px] transition-all duration-75 pointer-events-none" style={{ opacity: (pushProgress / 100) * 0.8, transform: `scale(${0.5 + (pushProgress / 100) * 0.8})` }} />
-            <div className="absolute text-center mt-[45vw] md:mt-[300px] pointer-events-none"><p className="text-[#4FACFE] tracking-[0.3em] text-xs md:text-sm">将散落的思维球拖拽至中心聚拢</p></div>
+            <div className="absolute text-center mt-[45vw] md:mt-[300px] pointer-events-none"><p className="text-[#4FACFE] tracking-[0.3em] text-xs md:text-sm">将散落的思维球拖动至中心聚拢</p></div>
           </div>
         )}
 
@@ -406,16 +462,20 @@ const CabinUI = ({
         )}
       </div>
 
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+         <SyncLogo className="mb-24 scale-[0.6] md:scale-[0.8]" isSyncing={pushProgress > 20 || cabinMode === 'inspiration'} />
+      </div>
+
       <div className="absolute inset-0 pointer-events-none overflow-hidden z-30">
         {ripples.map(ripple => <div key={ripple.id} className="ripple" style={{ left: ripple.x, top: ripple.y }} />)}
         {sparks.map(spark => (
-          <motion.div key={spark.id} initial={{ scale: 1, opacity: 1, x: spark.startX, y: spark.startY }} animate={{ scale: 0, opacity: 0, x: spark.endX, y: spark.endY }} transition={{ duration: 0.6, ease: "easeOut" }}
-            className="absolute w-3 h-3 bg-white rounded-full blur-[1px] shadow-[0_0_15px_#4FACFE]" />
+          <motion.div key={spark.id}
+            initial={{ scale: 1, opacity: 1, x: spark.startX, y: spark.startY }}
+            animate={{ scale: 0, opacity: 0, x: spark.endX, y: spark.endY }}
+            transition={{ duration: 0.6, ease: "easeOut" }}
+            className="absolute w-3 h-3 bg-white rounded-full blur-[1px] shadow-[0_0_15px_#4FACFE]"
+          />
         ))}
-      </div>
-
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-         <SyncLogo className="mb-24 scale-[0.6] md:scale-[0.8]" isSyncing={pushProgress > 20 || cabinMode === 'inspiration'} />
       </div>
 
       <AnimatePresence>
@@ -426,11 +486,12 @@ const CabinUI = ({
         )}
       </AnimatePresence>
 
-      {/* 🔴 VAD 智能录音面板 */}
+      {/* 🔴 彻底删除了键盘输入页面的录音 Modal */}
       <AnimatePresence>
         {ideaModal !== 'hidden' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md px-4">
             <div className="w-full max-w-lg bg-[#111111] border border-white/5 rounded-[32px] p-8 flex flex-col shadow-2xl relative overflow-hidden">
+              
               <div className="flex justify-between items-center mb-12 relative z-10">
                 <h3 className="text-lg font-light tracking-[0.2em] text-white/90">灵感记录</h3>
                 <button onClick={closeIdeaModal} className="text-white/30 hover:text-white/80 transition-colors text-sm tracking-widest">取消</button>
@@ -438,27 +499,16 @@ const CabinUI = ({
 
               {ideaModal === 'listening' && (
                 <div className="flex flex-col items-center justify-center py-8 relative z-10">
-                  <div className="relative flex items-center justify-center mb-8">
-                    <motion.div animate={{ scale:[1, 1.8, 1], opacity:[0.1, 0.4, 0.1] }} transition={{ duration: 2, repeat: Infinity }} className="absolute w-24 h-24 bg-[#4FACFE] rounded-full blur-[30px]" />
-                    <Mic size={36} className="text-[#4FACFE] relative z-10 drop-shadow-[0_0_10px_rgba(79,172,254,0.8)]" />
+                  <div 
+                    className="relative flex items-center justify-center mb-8 cursor-pointer group"
+                    onPointerDown={(e) => { e.stopPropagation(); handleManualSubmit(); }}
+                  >
+                    <motion.div animate={{ scale:[1, 1.8, 1], opacity:[0.1, 0.4, 0.1] }} transition={{ duration: 2, repeat: Infinity }} className="absolute w-24 h-24 bg-[#4FACFE] rounded-full blur-[30px] group-active:scale-90 transition-transform" />
+                    <Mic size={36} className="text-[#4FACFE] relative z-10 drop-shadow-[0_0_10px_rgba(79,172,254,0.8)] group-active:scale-90 transition-transform" />
                   </div>
-                  {/* 屏幕实时显示当前说出的话，如果没说话就显示提示 */}
                   <p className="text-white/80 tracking-widest text-sm mb-12 text-center h-10 overflow-hidden text-ellipsis px-4">
-                    {ideaInput ? ideaInput : "等待人声，或点击下方切换..."}
+                    {ideaInput ? ideaInput : "请说出你的灵感..."}
                   </p>
-                  
-                  <button onClick={() => updateModalState('typing')} className="flex items-center gap-2 px-6 py-2.5 rounded-full bg-white/5 border border-white/10 text-white/50 text-xs tracking-widest hover:bg-white/10 transition-all hover:text-white/80">
-                    <Keyboard size={14} /> 切换为键盘输入
-                  </button>
-                </div>
-              )}
-
-              {ideaModal === 'typing' && (
-                <div className="flex flex-col w-full relative z-10">
-                  <textarea autoFocus value={ideaInput} onChange={(e) => setIdeaInput(e.target.value)} placeholder="在这里输入你的碎片灵感..." className="w-full h-32 bg-white/5 border border-white/10 rounded-2xl p-4 text-white/90 placeholder-white/30 focus:outline-none focus:border-[#4FACFE]/50 transition-colors resize-none mb-6" />
-                  <button onClick={() => submitIdea(ideaInput)} disabled={!ideaInput.trim()} className="w-full py-4 rounded-xl bg-[#4FACFE]/20 text-[#4FACFE] tracking-widest font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[#4FACFE]/30 transition-all">
-                    存入卡片
-                  </button>
                 </div>
               )}
 
@@ -582,14 +632,14 @@ export default function App() {
   const [view, setView] = useState<'cabin' | 'mobile'>('mobile');
   const [cabinMode, setCabinMode] = useState<CabinMode>('idle');
   const[targetMode, setTargetMode] = useState<CabinMode | null>(null);
-  const[mobileState, setMobileState] = useState<MobileState>('home');
-  const[isTransitioning, setIsTransitioning] = useState(false);
+  const [mobileState, setMobileState] = useState<MobileState>('home');
+  const [isTransitioning, setIsTransitioning] = useState(false);
   
   const [timeElapsed, setTimeElapsed] = useState(0);
-  const[generatedCards, setGeneratedCards] = useState<string[]>([]);
-  const[sessionResult, setSessionResult] = useState<SessionResult | null>(null);
+  const [generatedCards, setGeneratedCards] = useState<string[]>([]);
+  const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
   
-  const[actionCount, setActionCount] = useState(0);
+  const [actionCount, setActionCount] = useState(0);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;

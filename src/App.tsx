@@ -215,31 +215,15 @@ const CabinUI = ({
       }
     }; 
 
-    // 极度安全的优雅重启机制
+    // 简单处理：断开后不自动重启，让用户知道
     recognitionRef.current.onend = () => {
-      if (ideaModalRef.current === 'listening' && !isStartingRef.current) {
-        // 如果连续没说话且断开超过 5 次，关闭
-        if (restartCountRef.current >= 5) {
-          console.warn("语音引擎连续异常断开，关闭");
+      if (ideaModalRef.current === 'listening') {
+        // 如果还有内容，直接提交
+        if (textBufferRef.current.trim()) {
+          handleManualSubmit();
+        } else {
           updateModalState('hidden');
-          return;
         }
-
-        restartCountRef.current += 1;
-        isStartingRef.current = true;
-
-        // 延迟 400ms 再拉起，给浏览器硬件缓冲时间
-        setTimeout(() => {
-          if (ideaModalRef.current === 'listening') {
-            try { 
-              recognitionRef.current.start(); 
-            } catch(e) {
-              console.error("重启麦克风失败:", e);
-            } finally {
-              isStartingRef.current = false;
-            }
-          }
-        }, 400);
       }
     };
 
