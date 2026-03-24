@@ -70,13 +70,13 @@ export default function MobileApp() {
     
     setScreen('connecting');
     
-    // 设置超时，5秒后如果还没连上就提示
+    // 设置超时，15秒后如果还没连上就提示
     const timeout = setTimeout(() => {
       console.error('连接超时');
       cleanup();
       setScreen('home');
-      alert('连接超时，请确认舱内大屏已生成连接码');
-    }, 5000);
+      alert('连接超时，请确认：\n1. 舱内大屏已生成连接码\n2. 手机网络正常');
+    }, 15000);
     
     try {
       await joinRoom(inputCode.toUpperCase(), (data) => {
