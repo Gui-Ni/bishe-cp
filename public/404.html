@@ -2,16 +2,25 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>SYNC·心跃</title>
   <script>
-    // GitHub Pages SPA fallback - serve index.html for all routes
-    // so React Router can handle /cabin and /mobile paths
-    sessionStorage.redirect = sessionStorage.redirect || window.location.pathname;
-    window.location.replace('/bishe-cp/');
+    // GitHub Pages SPA fallback - redirect to index.html preserving path
+    // so the React app can handle /cabin and /mobile routes
+    (function() {
+      var path = window.location.pathname;
+      // If already at root, stay at root
+      if (path === '/' || path === '' || path === '/bishe-cp/' || path === '/bishe-cp') {
+        window.location.replace('/bishe-cp/' + window.location.hash);
+      } else {
+        // Redirect to index with the path as hash
+        var cleanPath = path.replace('/bishe-cp', '');
+        window.location.replace('/bishe-cp/' + (cleanPath || '') + window.location.search + window.location.hash);
+      }
+    })();
   </script>
 </head>
 <body>
-  <p>Redirecting...</p>
+  <p>Redirecting to SYNC·心跃...</p>
 </body>
 </html>

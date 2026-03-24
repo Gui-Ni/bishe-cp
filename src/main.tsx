@@ -1,19 +1,76 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
 import MobileApp from './MobileApp';
 import CabinApp from './CabinApp';
 import './index.css';
 
+// 首页选择器 - 自动检测设备并显示对应入口
+function HomeSelector() {
+  const [autoNavigate, setAutoNavigate] = useState(false);
+  
+  useEffect(() => {
+    // 首次加载时，自动检测设备并跳转
+    if (!autoNavigate) {
+      setAutoNavigate(true);
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      if (isMobile) {
+        window.location.hash = '#mobile';
+      } else {
+        window.location.hash = '#cabin';
+      }
+    }
+  }, [autoNavigate]);
+  
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-[#0a0a0f] to-[#1a1a2e] flex flex-col items-center justify-center p-8">
+      <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent mb-4">
+        SYNC · 心跃
+      </h1>
+      <p className="text-gray-400 mb-6">正在跳转到正确页面...</p>
+      <div className="text-white text-sm text-gray-500">如果没有自动跳转，请手动选择：</div>
+      
+      <div className="flex flex-col gap-4 mt-6 w-full max-w-xs">
+        <a
+          href="#cabin"
+          className="p-6 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 border border-blue-500/40 rounded-2xl text-center"
+        >
+          <div className="text-2xl mb-2">🖥️</div>
+          <div className="text-white font-semibold">舱内大屏</div>
+          <div className="text-gray-400 text-sm">展位大屏展示</div>
+        </a>
+        
+        <a
+          href="#mobile"
+          className="p-6 bg-gradient-to-br from-orange-500/20 to-red-500/20 border border-orange-500/40 rounded-2xl text-center"
+        >
+          <div className="text-2xl mb-2">📱</div>
+          <div className="text-white font-semibold">手机遥控</div>
+          <div className="text-gray-400 text-sm">扫码连接舱内大屏</div>
+        </a>
+      </div>
+    </div>
+  );
+}
+
 // 根据 URL hash 判断加载哪个 App
-const hash = window.location.hash.replace('#', '');
-let EntryApp: React.ComponentType;
-if (hash === 'mobile') {
-  EntryApp = MobileApp;
-} else if (hash === 'cabin') {
-  EntryApp = CabinApp;
-} else {
-  EntryApp = HomeSelector;
+function getAppFromHash() {
+  const hash = window.location.hash.replace('#/', '').replace('#', '');
+  if (hash === 'mobile') return MobileApp;
+  if (hash === 'cabin') return CabinApp;
+  return null;
+}
+
+// 初始化
+let EntryApp = getAppFromHash() || HomeSelector;
+
+// 监听 hash 变化
+if (typeof window !== 'undefined') {
+  window.addEventListener('hashchange', () => {
+    const newApp = getAppFromHash();
+    if (newApp) {
+      window.location.reload();
+    }
+  });
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -21,52 +78,3 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <EntryApp />
   </React.StrictMode>
 );
-
-// 首页选择器
-function HomeSelector() {
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-[#0a0a0f] to-[#1a1a2e] flex flex-col items-center justify-center p-8">
-      <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent mb-4">
-        SYNC · 心跃
-      </h1>
-      <p className="text-gray-400 mb-12">选择运行模式</p>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-2xl">
-        <a
-          href="#cabin"
-          className="group p-8 bg-gradient-to-br from-blue-500/10 to-cyan-500/10 border border-blue-500/30 rounded-3xl hover:border-blue-500/60 transition-all"
-        >
-          <div className="w-16 h-16 bg-blue-500/20 rounded-2xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-            <svg className="w-8 h-8 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-          </div>
-          <h2 className="text-2xl font-bold text-white mb-2">舱内大屏</h2>
-          <p className="text-gray-400 text-sm">沉浸式体验界面，用于展位大屏展示</p>
-          <div className="mt-4 text-blue-400 text-sm">进入舱内模式 →</div>
-        </a>
-
-        <a
-          href="#mobile"
-          className="group p-8 bg-gradient-to-br from-orange-500/10 to-red-500/10 border border-orange-500/30 rounded-3xl hover:border-orange-500/60 transition-all"
-        >
-          <div className="w-16 h-16 bg-orange-500/20 rounded-2xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-            <svg className="w-8 h-8 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-            </svg>
-          </div>
-          <h2 className="text-2xl font-bold text-white mb-2">手机遥控</h2>
-          <p className="text-gray-400 text-sm">扫码连接舱内大屏，作为遥控器控制体验</p>
-          <div className="mt-4 text-orange-400 text-sm">进入手机模式 →</div>
-        </a>
-      </div>
-
-      <div className="mt-12 text-center text-gray-500 text-sm">
-        <p>访问地址：</p>
-        <p className="font-mono mt-1">
-          <span className="text-blue-400">/#cabin</span> 舱内大屏 &nbsp;|&nbsp; <span className="text-orange-400">/#mobile</span> 手机遥控
-        </p>
-      </div>
-    </div>
-  );
-}
