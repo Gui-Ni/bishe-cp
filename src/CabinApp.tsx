@@ -3,7 +3,7 @@
  * 沉浸式体验界面，支持 Firebase 实时同步
  */
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Zap, Sparkles, Wifi, WifiOff, Monitor, Power, Mic, Check, Hand, Loader2, QrCode, Heart
 } from 'lucide-react';

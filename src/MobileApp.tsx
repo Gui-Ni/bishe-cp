@@ -3,7 +3,7 @@
  * 充当舱内体验的"遥控器"
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { Zap, Sparkles, Wifi, WifiOff, ChevronRight, Check, X, Clock, Brain, Lightbulb, QrCode } from 'lucide-react';
 import { createRoom, joinRoom, sendMobileAction, watchCabinState, addInspirationCard, cleanup, CabinSession } from './services/firebase';
 
