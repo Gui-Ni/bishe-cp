@@ -5,16 +5,14 @@ import MobileApp from './MobileApp';
 import CabinApp from './CabinApp';
 import './index.css';
 
-// 根据路径判断加载哪个 App
-const path = window.location.pathname;
-
+// 根据 URL hash 判断加载哪个 App
+const hash = window.location.hash.replace('#', '');
 let EntryApp: React.ComponentType;
-if (path.includes('/mobile')) {
+if (hash === 'mobile') {
   EntryApp = MobileApp;
-} else if (path.includes('/cabin')) {
+} else if (hash === 'cabin') {
   EntryApp = CabinApp;
 } else {
-  // 默认显示选择界面
   EntryApp = HomeSelector;
 }
 
@@ -34,9 +32,8 @@ function HomeSelector() {
       <p className="text-gray-400 mb-12">选择运行模式</p>
       
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-2xl">
-        {/* 舱内大屏 */}
         <a
-          href="/cabin"
+          href="#cabin"
           className="group p-8 bg-gradient-to-br from-blue-500/10 to-cyan-500/10 border border-blue-500/30 rounded-3xl hover:border-blue-500/60 transition-all"
         >
           <div className="w-16 h-16 bg-blue-500/20 rounded-2xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
@@ -49,9 +46,8 @@ function HomeSelector() {
           <div className="mt-4 text-blue-400 text-sm">进入舱内模式 →</div>
         </a>
 
-        {/* 手机遥控 */}
         <a
-          href="/mobile"
+          href="#mobile"
           className="group p-8 bg-gradient-to-br from-orange-500/10 to-red-500/10 border border-orange-500/30 rounded-3xl hover:border-orange-500/60 transition-all"
         >
           <div className="w-16 h-16 bg-orange-500/20 rounded-2xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
@@ -66,9 +62,9 @@ function HomeSelector() {
       </div>
 
       <div className="mt-12 text-center text-gray-500 text-sm">
-        <p>部署后访问：</p>
+        <p>访问地址：</p>
         <p className="font-mono mt-1">
-          <span className="text-blue-400">/cabin</span> 舱内大屏 &nbsp;|&nbsp; <span className="text-orange-400">/mobile</span> 手机遥控
+          <span className="text-blue-400">/#cabin</span> 舱内大屏 &nbsp;|&nbsp; <span className="text-orange-400">/#mobile</span> 手机遥控
         </p>
       </div>
     </div>
