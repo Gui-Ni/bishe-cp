@@ -2,14 +2,323 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>SYNC·心跃 - 手机遥控</title>
-  <script type="module" crossorigin src="./assets/mobile-C5zzGf1K.js"></script>
-  <link rel="modulepreload" crossorigin href="./assets/index-CVqqVJWs.js">
-  <link rel="modulepreload" crossorigin href="./assets/MobileApp-BS_dY-gb.js">
-  <link rel="stylesheet" crossorigin href="./assets/index-DiReGJ5_.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e, #16213e);
+      min-height: 100vh;
+      color: white;
+      padding: 20px;
+    }
+    .header {
+      text-align: center;
+      padding: 40px 0;
+    }
+    .logo {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, #4FACFE, #00f2fe);
+      border-radius: 50%;
+      margin: 0 auto 20px;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 0.8; }
+      50% { transform: scale(0.95); opacity: 0.6; }
+    }
+    h1 { font-size: 28px; margin-bottom: 8px; }
+    .subtitle { color: #666; font-size: 14px; }
+    
+    .card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 20px;
+      padding: 30px;
+      margin: 20px 0;
+    }
+    
+    .input-group { margin-bottom: 20px; }
+    label { display: block; font-size: 14px; color: #888; margin-bottom: 8px; }
+    input {
+      width: 100%;
+      padding: 16px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      color: white;
+      font-size: 24px;
+      text-align: center;
+      letter-spacing: 8px;
+      text-transform: uppercase;
+    }
+    input:focus { outline: none; border-color: #4FACFE; }
+    
+    .btn {
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #4FACFE, #00f2fe);
+      color: white;
+    }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 16px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #666;
+    }
+    .dot.connected { background: #4CAF50; }
+    .dot.waiting { background: #FFC107; }
+    .dot.error { background: #f44336; }
+    
+    .mode-card {
+      padding: 20px;
+      border-radius: 16px;
+      margin-bottom: 16px;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    .mode-card:active { transform: scale(0.98); }
+    .mode-recharge {
+      background: linear-gradient(135deg, rgba(79,172,254,0.2), rgba(0,242,254,0.1));
+      border: 1px solid rgba(79,172,254,0.3);
+    }
+    .mode-inspiration {
+      background: linear-gradient(135deg, rgba(255,107,53,0.2), rgba(255,67,54,0.1));
+      border: 1px solid rgba(255,107,53,0.3);
+    }
+    .mode-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+    .mode-desc { font-size: 12px; opacity: 0.7; }
+    
+    .hidden { display: none !important; }
+    .text-center { text-align: center; }
+    .mt-4 { margin-top: 16px; }
+    .opacity-50 { opacity: 0.5; }
+  </style>
 </head>
 <body>
-  <div id="root"></div>
+  <!-- 首页 -->
+  <div id="page-home">
+    <div class="header">
+      <div class="logo"></div>
+      <h1>SYNC·心跃</h1>
+      <p class="subtitle">舱内体验遥控器</p>
+    </div>
+    
+    <div class="card">
+      <div class="input-group">
+        <label>输入舱内大屏显示的6位连接码</label>
+        <input type="text" id="codeInput" maxlength="6" placeholder="______" />
+      </div>
+      <button class="btn btn-primary" id="joinBtn" onclick="joinRoom()">加入体验</button>
+    </div>
+  </div>
+  
+  <!-- 连接中 -->
+  <div id="page-connecting" class="hidden">
+    <div class="header">
+      <div class="logo"></div>
+      <h1>连接中...</h1>
+      <p class="subtitle">正在加入房间</p>
+    </div>
+  </div>
+  
+  <!-- 控制台 -->
+  <div id="page-controller" class="hidden">
+    <div class="header">
+      <div class="logo"></div>
+      <h1>SYNC·心跃</h1>
+      <p class="subtitle">已连接舱内大屏</p>
+    </div>
+    
+    <div class="status">
+      <div class="dot connected" id="statusDot"></div>
+      <span id="statusText">手机已连接</span>
+    </div>
+    
+    <div id="mode-select">
+      <p class="opacity-50 text-center mb-4">请选择体验模式</p>
+      <div class="mode-card mode-recharge" onclick="selectMode('recharge')">
+        <div class="mode-title">精神充能</div>
+        <div class="mode-desc">聚焦 · 收束 · 稳定</div>
+      </div>
+      <div class="mode-card mode-inspiration" onclick="selectMode('inspiration')">
+        <div class="mode-title">灵感触发</div>
+        <div class="mode-desc">激活 · 发散 · 发现</div>
+      </div>
+    </div>
+    
+    <div id="mode-active" class="hidden">
+      <div class="card text-center">
+        <div id="activeModeTitle" style="font-size:20px;font-weight:600;margin-bottom:8px;"></div>
+        <div id="activeModeDesc" style="opacity:0.6;margin-bottom:16px;"></div>
+        <div style="height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;">
+          <div id="progressBar" style="height:100%;background:linear-gradient(90deg,#4FACFE,#00f2fe);width:0%;transition:width 1s;"></div>
+        </div>
+        <div id="progressText" class="mt-4 opacity-50">0%</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+  
+  <script>
+    // Firebase 配置
+    const firebaseConfig = {
+      apiKey: "AIzaSyC_WIUxzdXuqAzdrjM4kJAUSK59txPWonc",
+      authDomain: "gray-d5f9f.firebaseapp.com",
+      databaseURL: "https://gray-d5f9f-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "gray-d5f9f",
+      storageBucket: "gray-d5f9f.firebasestorage.app",
+      messagingSenderId: "679523583493",
+      appId: "1:679523583493:web:8f3c6e614aa8e17e6e3e6c"
+    };
+
+    // 初始化 Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    
+    let currentCode = null;
+    let currentMode = null;
+    let startTime = null;
+    
+    // 页面切换
+    function showPage(id) {
+      ['page-home', 'page-connecting', 'page-controller'].forEach(p => {
+        document.getElementById(p).classList.add('hidden');
+      });
+      document.getElementById(id).classList.remove('hidden');
+    }
+    
+    // 加入房间
+    async function joinRoom() {
+      const code = document.getElementById('codeInput').value.toUpperCase().trim();
+      if (code.length !== 6) {
+        alert('请输入6位连接码');
+        return;
+      }
+      
+      showPage('page-connecting');
+      currentCode = code;
+      
+      // 监听房间数据
+      const roomRef = db.ref('sessions/' + code);
+      
+      roomRef.on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (!data) {
+          alert('房间不存在或已关闭');
+          showPage('page-home');
+          return;
+        }
+        
+        showPage('page-controller');
+        
+        // 更新舱内状态
+        if (data.mobile) {
+          document.getElementById('statusText').textContent = 
+            data.mobile.connected ? '手机已连接' : '等待舱内响应...';
+          document.getElementById('statusDot').className = 
+            'dot ' + (data.mobile.connected ? 'connected' : 'waiting');
+        }
+        
+        // 更新舱内模式
+        if (data.cabin && data.cabin.mode !== 'idle') {
+          updateActiveMode(data.cabin.mode);
+        }
+      }, (error) => {
+        alert('连接失败: ' + error.message);
+        showPage('page-home');
+      });
+      
+      // 写入手机连接状态
+      roomRef.child('mobile').update({
+        connected: true,
+        lastSeen: Date.now()
+      });
+    }
+    
+    // 选择模式
+    async function selectMode(mode) {
+      if (!currentCode) return;
+      
+      currentMode = mode;
+      const modeInfo = {
+        recharge: { title: '精神充能', desc: '聚焦 · 收束 · 稳定' },
+        inspiration: { title: '灵感触发', desc: '激活 · 发散 · 发现' }
+      };
+      
+      // 更新 Firebase
+      await db.ref('sessions/' + currentCode + '/mobile').update({
+        lastAction: 'start_' + mode,
+        lastSeen: Date.now()
+      });
+      
+      updateActiveMode(mode);
+    }
+    
+    // 更新活跃模式显示
+    function updateActiveMode(mode) {
+      const modeInfo = {
+        recharge: { title: '精神充能', desc: '聚焦 · 收束 · 稳定' },
+        inspiration: { title: '灵感触发', desc: '激活 · 发散 · 发现' },
+        'pose-confirm': { title: '姿态确认中', desc: '请在舱内保持姿势' },
+        ending: { title: '体验结束', desc: '正在生成报告...' },
+        completed: { title: '已完成', desc: '体验完成！' }
+      };
+      
+      const info = modeInfo[mode] || { title: mode, desc: '' };
+      
+      document.getElementById('mode-select').classList.add('hidden');
+      document.getElementById('mode-active').classList.remove('hidden');
+      document.getElementById('activeModeTitle').textContent = info.title;
+      document.getElementById('activeModeDesc').textContent = info.desc;
+      
+      // 更新进度条
+      if (mode === 'recharge' || mode === 'inspiration') {
+        startTime = Date.now();
+        updateProgress();
+      }
+    }
+    
+    // 更新进度
+    function updateProgress() {
+      if (!startTime) return;
+      const elapsed = (Date.now() - startTime) / 1000;
+      const total = currentMode === 'recharge' ? 600 : 720;
+      const pct = Math.min(elapsed / total * 100, 100);
+      document.getElementById('progressBar').style.width = pct + '%';
+      document.getElementById('progressText').textContent = Math.round(pct) + '%';
+      if (pct < 100) {
+        setTimeout(updateProgress, 1000);
+      }
+    }
+    
+    // 输入框自动大写
+    document.getElementById('codeInput').addEventListener('input', function(e) {
+      e.target.value = e.target.value.toUpperCase();
+    });
+  </script>
 </body>
 </html>
