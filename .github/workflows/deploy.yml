@@ -25,12 +25,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: ''  # 禁用缓存
-      
-      - name: Verify Firebase secrets
-        run: |
-          echo "VITE_FIREBASE_API_KEY length: ${#VITE_FIREBASE_API_KEY}"
-          echo "VITE_FIREBASE_DATABASE_URL: $VITE_FIREBASE_DATABASE_URL"
+          cache: ''
       
       - name: Install dependencies
         run: npm ci
@@ -50,7 +45,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./dist
+          path: ./docs
 
   deploy:
     needs: build
