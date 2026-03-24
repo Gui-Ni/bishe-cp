@@ -11,6 +11,7 @@ import {
   createRoom,
   updateCabinMode,
   watchMobileActions,
+  watchMobileConnected,
   addInspirationCard,
   cleanup,
   sendMobileAction
@@ -148,6 +149,12 @@ export default function CabinApp() {
         
         // 清除动作
         sendMobileAction(null);
+      });
+      
+      // 监听手机连接状态
+      watchMobileConnected((connected) => {
+        console.log('手机连接状态:', connected);
+        setMobileConnected(connected);
       });
       
       // 隐藏二维码，显示等待

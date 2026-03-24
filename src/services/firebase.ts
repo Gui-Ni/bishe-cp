@@ -115,6 +115,17 @@ export const watchMobileActions = (onAction: (action: string) => void): (() => v
   return unsubscribe;
 };
 
+// 监听手机连接状态（舱内端）
+export const watchMobileConnected = (onConnected: (connected: boolean) => void): (() => void) => {
+  if (!currentSessionCode) return () => {};
+  const connectedRef = ref(database, `sessions/${currentSessionCode}/mobile/connected`);
+  const unsubscribe = onValue(connectedRef, (snapshot) => {
+    onConnected(snapshot.val() === true);
+  });
+  unsubscribers.push(unsubscribe);
+  return unsubscribe;
+};
+
 // 监听舱内状态（手机端）
 export const watchCabinState = (onStateChange: (state: Partial<CabinSession['cabin']>) => void): (() => void) => {
   if (!currentSessionCode) return () => {};
