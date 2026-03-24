@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SYNC·心跃</title>
+  <script>
+    // GitHub Pages SPA fallback - serve index.html for all routes
+    // so React Router can handle /cabin and /mobile paths
+    sessionStorage.redirect = sessionStorage.redirect || window.location.pathname;
+    window.location.replace('/bishe-cp/');
+  </script>
+</head>
+<body>
+  <p>Redirecting...</p>
+</body>
+</html>
