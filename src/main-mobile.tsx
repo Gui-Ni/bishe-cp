@@ -1,10 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import CabinApp from './CabinApp';
+import MobileApp from './MobileApp';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <CabinApp />
+    <MobileApp />
   </React.StrictMode>
 );
