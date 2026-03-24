@@ -69,16 +69,32 @@ export default function MobileApp() {
     if (inputCode.length !== 6) return;
     
     setScreen('connecting');
+    
+    // 设置超时，5秒后如果还没连上就提示
+    const timeout = setTimeout(() => {
+      console.error('连接超时');
+      cleanup();
+      setScreen('home');
+      alert('连接超时，请确认舱内大屏已生成连接码');
+    }, 5000);
+    
     try {
       await joinRoom(inputCode.toUpperCase(), (data) => {
+        clearTimeout(timeout);
         if (data) {
           setCabinState(data.cabin);
           setIsConnected(true);
           setScreen('controller');
           watchCabinState(handleStateChange);
+        } else {
+          // 房间不存在
+          cleanup();
+          setScreen('home');
+          alert('房间不存在，请确认连接码正确');
         }
       });
     } catch (err) {
+      clearTimeout(timeout);
       console.error('加入房间失败:', err);
       setScreen('home');
     }
